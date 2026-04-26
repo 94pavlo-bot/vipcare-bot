@@ -25,7 +25,7 @@ TIERS = [
     ("Silver",   14,  "CODE_SILVER",   "🥈"),
     ("Gold",     30,  "CODE_GOLD",     "🥇"),
     ("Platinum", 60,  "CODE_PLATINUM", "💎"),
-    ("Black",    90,  "CODE_BLACK",    "🖤"),
+    ("Black",    90,  "TIER_BLACK",    "🖤"),
     ("Supreme",  180, "CODE_SUPREME",  "👑"),
 ]
 TIER_NAMES = [t[0] for t in TIERS]
