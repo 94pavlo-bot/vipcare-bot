@@ -14,19 +14,19 @@ BOT_TOKEN    = os.environ["BOT_TOKEN"]
 CHANNEL_ID   = os.environ.get("CHANNEL_ID", "@vipcare_io")
 DB_PATH      = os.environ.get("DB_PATH", "users.db")
 ADMIN_ID     = int(os.environ.get("ADMIN_ID", "0"))
-PARTNER_CODE = os.environ.get("CODE_PARTNER", "VIPCARE-G4L8V")
+PARTNER_CODE = os.environ.get("TIER_PARTNER", "VIPCARE-G4L8V")
 
 RATE_LIMIT  = 5
 RATE_WINDOW = 3600
 
 # (name, days_required, env_var, emoji)
 TIERS = [
-    ("Bronze",   3,   "CODE_BRONZE",   "🥉"),
-    ("Silver",   14,  "CODE_SILVER",   "🥈"),
-    ("Gold",     30,  "CODE_GOLD",     "🥇"),
-    ("Platinum", 60,  "CODE_PLATINUM", "💎"),
+    ("Bronze",   3,   "TIER_BRONZE",   "🥉"),
+    ("Silver",   14,  "TIER_SILVER",   "🥈"),
+    ("Gold",     30,  "TIER_GOLD",     "🥇"),
+    ("Platinum", 60,  "TIER_PLATINUM", "💎"),
     ("Black",    90,  "TIER_BLACK",    "🖤"),
-    ("Supreme",  180, "CODE_SUPREME",  "👑"),
+    ("Supreme",  180, "TIER_SUPREME",  "👑"),
 ]
 TIER_NAMES = [t[0] for t in TIERS]
 
