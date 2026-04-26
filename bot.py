@@ -24,8 +24,8 @@ TIERS = [
     ("Bronze",   3,   "TIER_BRONZE",   "🥉"),
     ("Silver",   14,  "TIER_SILVER",   "🥈"),
     ("Gold",     30,  "TIER_GOLD",     "🥇"),
-    ("Platinum", 60,  "TIER_PLATINUM", "💎"),
-    ("Black",    90,  "TIER_BLACK",    "🖤"),
+    ("Platinum", 60,  "TIER_PLATINUM", "🪩"),
+    ("Diamond",  90,  "TIER_BLACK",    "💎"),
     ("Supreme",  180, "TIER_SUPREME",  "👑"),
 ]
 TIER_NAMES = [t[0] for t in TIERS]
@@ -427,8 +427,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🥉 Bronze: {counts.get('Bronze', 0)}\n"
         f"🥈 Silver: {counts.get('Silver', 0)}\n"
         f"🥇 Gold: {counts.get('Gold', 0)}\n"
-        f"💎 Platinum: {counts.get('Platinum', 0)}\n"
-        f"🖤 Black: {counts.get('Black', 0)}\n"
+        f"🪩 Platinum: {counts.get('Platinum', 0)}\n"
+        f"💎 Diamond: {counts.get('Diamond', 0)}\n"
         f"👑 Supreme: {counts.get('Supreme', 0)}\n"
         f"🤝 Partner: {partners}",
         parse_mode="HTML"
