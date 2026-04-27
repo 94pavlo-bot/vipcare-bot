@@ -1,23 +1,30 @@
 import os
 import sqlite3
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from telegram import Update
 from telegram.ext import (
-    Application, CommandHandler, ChatMemberHandler, ContextTypes
+    Application, CommandHandler, ChatMemberHandler,
+    MessageHandler, ContextTypes, filters
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def parse_iso(s: str) -> datetime:
+    dt = datetime.fromisoformat(s)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 BOT_TOKEN    = os.environ["BOT_TOKEN"]
 CHANNEL_ID   = os.environ.get("CHANNEL_ID", "@vipcare_io")
 DB_PATH      = os.environ.get("DB_PATH", "users.db")
 ADMIN_ID     = int(os.environ.get("ADMIN_ID", "0"))
 PARTNER_CODE = os.environ.get("TIER_PARTNER", "VIPCARE-G4L8V")
-
-RATE_LIMIT  = 5
-RATE_WINDOW = 3600
 
 # (name, days_required, env_var, emoji)
 TIERS = [
@@ -30,13 +37,72 @@ TIERS = [
 ]
 TIER_NAMES = [t[0] for t in TIERS]
 
+TIER_UPGRADE_MESSAGES = {
+    "Bronze": (
+        "🥉 You've reached <b>Bronze</b> status — welcome to the inner circle!\n\n"
+        "Your first article from the VIPCare Library is now unlocked. "
+        "This is just the beginning. Keep it up 🚀"
+    ),
+    "Silver": (
+        "🥈 <b>Silver</b> status unlocked — you're ahead of the crowd.\n\n"
+        "Two weeks in, and the library keeps opening up for you. "
+        "The insights at this level are the real deal. Stay consistent."
+    ),
+    "Gold": (
+        "🥇 <b>Gold</b> — you've genuinely earned this.\n\n"
+        "30 days of commitment. Three premium frameworks are now yours. "
+        "This is where serious VIP operators operate. You belong here."
+    ),
+    "Platinum": (
+        "🪩 <b>Platinum</b> status achieved — that's two months strong.\n\n"
+        "You're in a rare group of operators who actually invest in their craft. "
+        "Four exclusive pieces of content are now unlocked. "
+        "The gap between you and the average operator just got wider."
+    ),
+    "Diamond": (
+        "💎 <b>Diamond</b>. Seriously impressive.\n\n"
+        "Three months of consistent engagement puts you in the top 1% of our community. "
+        "Five library articles — all yours. "
+        "This is what commitment looks like."
+    ),
+    "Supreme": (
+        "👑 <b>Supreme</b>. The highest level — and you made it.\n\n"
+        "Six months. That's not luck, that's dedication. "
+        "You've unlocked the entire VIPCare Library — every framework, every playbook, everything we've built.\n\n"
+        "Welcome to the top. You belong here. 🏆"
+    ),
+}
+
+WELCOME = (
+    "👋 Добро пожаловать в VIPCare.io\n\n"
+    "Этот бот даёт доступ к <b>VIPCare Library</b> — статьи, фреймворки и модели "
+    "от лидеров индустрии iGaming.\n\n"
+    "<b>Команды:</b>\n"
+    "/start — проверить статус + получить код\n"
+    "/partner — хочешь стать автором новой статьи"
+)
+
+PARTNER_MSG = (
+    "✍️ <b>Стать автором VIPCare Library</b>\n\n"
+    "Спасибо за интерес! Мы с удовольствием рассмотрим вашу статью.\n\n"
+    "Все релевантные материалы публикуются в VIPCare Library:\n"
+    "✅ С указанием автора и гиперссылкой на ваш LinkedIn\n"
+    "✅ С отдельным постом в нашем TG-канале\n\n"
+    "Единственное условие — материал должен быть реально полезным "
+    "для iGaming-ниши и пройти наш редакционный аудит.\n\n"
+    "📨 <b>Отправьте материал прямо сюда в формате:</b>\n"
+    "• Файл статьи (PDF, DOCX или ссылка на Google Docs)\n"
+    "• Имя автора\n"
+    "• Ваш никнейм в Telegram\n\n"
+    "Рассмотрим в течение нескольких дней и дадим обратную связь."
+)
+
 
 def get_code(env_var: str) -> str:
     return os.environ.get(env_var, "VIPCARE-XXXXX")
 
 
 def get_current_tier(seconds: int):
-    """Highest tier reached. Returns (name, days, env_var, emoji) or None if Entry."""
     result = None
     for tier in TIERS:
         if seconds >= tier[1] * 86400:
@@ -45,7 +111,6 @@ def get_current_tier(seconds: int):
 
 
 def get_next_tier(seconds: int):
-    """Next tier to reach. Returns None if Supreme already reached."""
     for tier in TIERS:
         if seconds < tier[1] * 86400:
             return tier
@@ -65,7 +130,6 @@ def init_db():
     with sqlite3.connect(DB_PATH) as c:
         cols = [r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()]
         if cols and "active_seconds" not in cols:
-            # Migrate from old schema
             c.execute("DROP TABLE users")
             logger.info("Old DB schema dropped — migrating.")
 
@@ -78,16 +142,26 @@ def init_db():
                 partner            INTEGER DEFAULT 0,
                 highest_sent       TEXT DEFAULT '',
                 check_count        INTEGER DEFAULT 0,
-                check_window_start TEXT
+                check_window_start TEXT,
+                awaiting_article   INTEGER DEFAULT 0
             )
         """)
+
+        # Live migration: add awaiting_article if DB already exists without it
+        if cols and "awaiting_article" not in cols:
+            try:
+                c.execute("ALTER TABLE users ADD COLUMN awaiting_article INTEGER DEFAULT 0")
+                logger.info("Migrated: added awaiting_article column.")
+            except Exception:
+                pass
 
 
 def get_user(user_id: int):
     with sqlite3.connect(DB_PATH) as c:
         return c.execute(
             "SELECT active_seconds, last_sub_start, is_subscribed, partner, "
-            "highest_sent, check_count, check_window_start FROM users WHERE user_id = ?",
+            "highest_sent, check_count, check_window_start, awaiting_article "
+            "FROM users WHERE user_id = ?",
             (user_id,)
         ).fetchone()
 
@@ -98,8 +172,7 @@ def upsert_user(user_id: int):
 
 
 def set_subscribed(user_id: int, subscribed: bool):
-    """Resume or freeze the subscription timer."""
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = utcnow().isoformat()
     with sqlite3.connect(DB_PATH) as c:
         row = c.execute(
             "SELECT active_seconds, last_sub_start, is_subscribed FROM users WHERE user_id = ?",
@@ -122,21 +195,21 @@ def set_subscribed(user_id: int, subscribed: bool):
                 (now_iso, user_id)
             )
         elif not subscribed and is_sub and last_sub_start:
-            elapsed = int((datetime.utcnow() - datetime.fromisoformat(last_sub_start)).total_seconds())
+            elapsed = int((utcnow() - parse_iso(last_sub_start)).total_seconds())
             c.execute(
-                "UPDATE users SET active_seconds = ?, last_sub_start = NULL, is_subscribed = 0 WHERE user_id = ?",
+                "UPDATE users SET active_seconds = ?, last_sub_start = NULL, is_subscribed = 0 "
+                "WHERE user_id = ?",
                 (active_seconds + elapsed, user_id)
             )
 
 
 def get_effective_seconds(user_id: int) -> tuple[int, bool]:
-    """(total subscribed seconds, is currently subscribed)."""
     row = get_user(user_id)
     if not row:
         return 0, False
     active_seconds, last_sub_start, is_subscribed = row[0], row[1], row[2]
     if is_subscribed and last_sub_start:
-        session = int((datetime.utcnow() - datetime.fromisoformat(last_sub_start)).total_seconds())
+        session = int((utcnow() - parse_iso(last_sub_start)).total_seconds())
         return active_seconds + session, True
     return active_seconds, bool(is_subscribed)
 
@@ -151,25 +224,12 @@ def set_partner(user_id: int):
         c.execute("UPDATE users SET partner = 1 WHERE user_id = ?", (user_id,))
 
 
-def record_check(user_id: int, count: int, window_start: str):
+def set_awaiting_article(user_id: int, value: bool):
     with sqlite3.connect(DB_PATH) as c:
         c.execute(
-            "UPDATE users SET check_count = ?, check_window_start = ? WHERE user_id = ?",
-            (count, window_start, user_id)
+            "UPDATE users SET awaiting_article = ? WHERE user_id = ?",
+            (1 if value else 0, user_id)
         )
-
-
-def check_rate_limit(check_count: int, window_start) -> tuple[bool, int, str]:
-    now = datetime.utcnow()
-    now_iso = now.isoformat()
-    if not window_start:
-        return False, 1, now_iso
-    elapsed = int((now - datetime.fromisoformat(window_start)).total_seconds())
-    if elapsed >= RATE_WINDOW:
-        return False, 1, now_iso
-    if check_count >= RATE_LIMIT:
-        return True, check_count, window_start
-    return False, check_count + 1, window_start
 
 
 # ── HELPERS ─────────────────────────────────────────────────────────────────
@@ -193,202 +253,143 @@ async def is_channel_member(bot, user_id: int) -> bool:
         return False
 
 
-async def maybe_notify_new_tier(update: Update, user_id: int, effective_seconds: int, highest_sent: str):
-    """Send congratulations if user reached a new tier since last check."""
+async def maybe_notify_new_tier(context: ContextTypes.DEFAULT_TYPE, user_id: int,
+                                 effective_seconds: int, highest_sent: str) -> bool:
+    """Send tier upgrade notification if user reached a new tier. Returns True if sent."""
     current = get_current_tier(effective_seconds)
     if not current:
-        return
+        return False
 
     name, _, env_var, emoji = current
     if highest_sent and tier_index(name) <= tier_index(highest_sent):
-        return  # Already notified
+        return False
 
     code = get_code(env_var)
-    await update.message.reply_text(
-        f"🎉 Поздравляем — ты достиг <b>{emoji} {name}</b>!\n\n"
-        f"Твой VIP статус: <b>{name}</b>\n"
-        f"Твой код: <code>{code}</code>\n\n"
-        f"Он открывает <b>{name}</b> и весь контент ниже по статусу.\n"
-        f"Введи на <a href=\"https://library.vipcare.io\">library.vipcare.io</a>",
-        parse_mode="HTML",
-        disable_web_page_preview=True
+    base_msg = TIER_UPGRADE_MESSAGES.get(name, f"{emoji} You've reached <b>{name}</b>!")
+    full_msg = (
+        f"{base_msg}\n\n"
+        f"Your access code: <code>{code}</code>\n"
+        f"→ <a href=\"https://library.vipcare.io\">library.vipcare.io</a>"
     )
-    mark_highest_sent(user_id, name)
 
-
-# ── HANDLERS ────────────────────────────────────────────────────────────────
-
-WELCOME = (
-    "👋 Добро пожаловать в VIPcare!\n\n"
-    "Этот бот даёт доступ к <b>VIPcare Library</b> — фреймворки, модели и плейбуки "
-    "из 6+ лет управления VIP программами в топовых операторах.\n\n"
-    "<b>Команды:</b>\n"
-    "/start — проверить статус\n"
-    "/code — получить код доступа\n"
-    "/partner — активировать Partner доступ"
-)
-
-
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await update.message.reply_text(WELCOME, parse_mode="HTML")
-
-    member = await is_channel_member(context.bot, user.id)
-    upsert_user(user.id)
-    set_subscribed(user.id, member)
-
-    if not member:
-        await update.message.reply_text(
-            "Чтобы получить доступ к библиотеке, подпишись на канал:\n"
-            "👉 t.me/vipcare_io\n\n"
-            "После 3 дней подписки отправь /code"
-        )
-        return
-
-    effective_seconds, _ = get_effective_seconds(user.id)
-    row = get_user(user.id)
-    highest_sent = row[4] if row else ""
-
-    await maybe_notify_new_tier(update, user.id, effective_seconds, highest_sent)
-
-    # Re-fetch after possible update
-    row = get_user(user.id)
-    highest_sent = row[4] if row else ""
-
-    current = get_current_tier(effective_seconds)
-    nxt = get_next_tier(effective_seconds)
-
-    if not current:
-        # Entry
-        next_name, next_days, _, next_emoji = nxt
-        left = next_days * 86400 - effective_seconds
-        await update.message.reply_text(
-            f"🆕 Твой VIP статус: <b>Entry</b>\n\n"
-            f"Через <b>{fmt(left)}</b> ты получишь статус {next_emoji} <b>{next_name}</b> "
-            f"и доступ к первой статье VIP библиотеки.",
-            parse_mode="HTML"
-        )
-    elif nxt:
-        name, _, _, emoji = current
-        next_name, next_days, _, next_emoji = nxt
-        left = next_days * 86400 - effective_seconds
-        await update.message.reply_text(
-            f"{emoji} Твой VIP статус: <b>{name}</b>\n\n"
-            f"Следующий: {next_emoji} <b>{next_name}</b> через <b>{fmt(left)}</b>",
-            parse_mode="HTML"
-        )
-    else:
-        await update.message.reply_text(
-            "👑 Твой VIP статус: <b>Supreme</b>\n\n"
-            "Ты достиг максимального уровня. Уважение!",
-            parse_mode="HTML"
-        )
-
-
-async def cmd_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-
-    member = await is_channel_member(context.bot, user.id)
-    upsert_user(user.id)
-    set_subscribed(user.id, member)
-
-    row = get_user(user.id)
-    _, _, _, partner, highest_sent, check_count, window_start = row
-
-    if partner:
-        await update.message.reply_text(
-            f"🤝 Твой VIP статус: <b>Partner</b>\n\n"
-            f"Твой код открывает весь контент библиотеки.\n\n"
-            f"Твой код: <code>{PARTNER_CODE}</code>\n"
-            f"Введи на <a href=\"https://library.vipcare.io\">library.vipcare.io</a>",
+    try:
+        await context.bot.send_message(
+            user_id, full_msg,
             parse_mode="HTML",
             disable_web_page_preview=True
         )
-        return
+    except Exception as e:
+        logger.warning(f"Could not notify user {user_id}: {e}")
+        return False
 
-    if not member:
-        effective_seconds, _ = get_effective_seconds(user.id)
-        current = get_current_tier(effective_seconds)
-        status_name = current[0] if current else "Entry"
-        status_emoji = current[3] if current else "🆕"
-        await update.message.reply_text(
-            f"⏸ Твой прогресс заморожен на {status_emoji} <b>{status_name}</b>.\n"
-            f"Подпишись на @vipcare_io чтобы продолжить.\n"
-            f"Твои дни сохранены — ничего не потеряно.",
-            parse_mode="HTML"
+    mark_highest_sent(user_id, name)
+    return True
+
+
+def build_status_block(effective_seconds: int, is_member: bool, partner: bool) -> str:
+    if partner:
+        return (
+            f"🤝 Твой VIP статус: <b>Partner</b>\n\n"
+            f"Твой код: <code>{PARTNER_CODE}</code>\n"
+            f"→ <a href=\"https://library.vipcare.io\">library.vipcare.io</a>\n\n"
+            f"Полный доступ к библиотеке — все фреймворки и плейбуки."
         )
-        return
 
-    # Rate limit
-    limited, new_count, new_window = check_rate_limit(check_count, window_start)
-    if limited:
-        await update.message.reply_text("⏳ Превышен лимит проверок. Попробуй чуть позже.")
-        return
-    record_check(user.id, new_count, new_window)
-
-    effective_seconds, _ = get_effective_seconds(user.id)
-    await maybe_notify_new_tier(update, user.id, effective_seconds, highest_sent)
-
-    # Re-fetch
-    row = get_user(user.id)
-    highest_sent = row[4]
+    if not is_member:
+        current = get_current_tier(effective_seconds)
+        status_emoji = current[3] if current else "🆕"
+        status_name  = current[0] if current else "Entry"
+        return (
+            f"⏸ Твой прогресс заморожен на {status_emoji} <b>{status_name}</b>.\n\n"
+            f"Подпишись на @vipcare_io чтобы продолжить — твои дни сохранены."
+        )
 
     current = get_current_tier(effective_seconds)
-    nxt = get_next_tier(effective_seconds)
+    nxt     = get_next_tier(effective_seconds)
 
     if not current:
         next_name, next_days, _, next_emoji = nxt
         left = next_days * 86400 - effective_seconds
-        await update.message.reply_text(
+        return (
             f"🆕 Твой VIP статус: <b>Entry</b>\n\n"
-            f"Через <b>{fmt(left)}</b> ты получишь статус {next_emoji} <b>{next_name}</b> "
-            f"и доступ к первой статье VIP библиотеки.",
-            parse_mode="HTML"
+            f"До {next_emoji} <b>{next_name}</b> — <b>{fmt(left)}</b>.\n"
+            f"Оставайся подписан, и мы напишем когда статус повысится 🔔"
         )
-        return
 
     name, _, env_var, emoji = current
     code = get_code(env_var)
-
     msg = (
         f"{emoji} Твой VIP статус: <b>{name}</b>\n\n"
         f"Твой код: <code>{code}</code>\n"
-        f"Он открывает <b>{name}</b> и весь контент ниже по статусу.\n"
+        f"→ <a href=\"https://library.vipcare.io\">library.vipcare.io</a>\n"
     )
     if nxt:
         next_name, next_days, _, next_emoji = nxt
         left = next_days * 86400 - effective_seconds
         msg += f"\nСледующий: {next_emoji} <b>{next_name}</b> через <b>{fmt(left)}</b>"
     else:
-        msg += "\n👑 Ты достиг максимального статуса!"
+        msg += "\n👑 Максимальный статус достигнут. Уважение!"
+    return msg
 
-    msg += f"\n\nВведи на <a href=\"https://library.vipcare.io\">library.vipcare.io</a>"
 
-    await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
+# ── HANDLERS ────────────────────────────────────────────────────────────────
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    upsert_user(user.id)
+
+    await update.message.reply_text(WELCOME, parse_mode="HTML", disable_web_page_preview=True)
+
+    member = await is_channel_member(context.bot, user.id)
+    set_subscribed(user.id, member)
+
+    effective_seconds, _ = get_effective_seconds(user.id)
+    row = get_user(user.id)
+    _, _, _, partner, highest_sent, _, _, _ = row
+
+    # Check for tier upgrade — if upgraded, the congrats message already has the code
+    upgraded = False
+    if member and not partner:
+        upgraded = await maybe_notify_new_tier(context, user.id, effective_seconds, highest_sent or "")
+
+    # Show status block only if no upgrade notification was just sent
+    if not upgraded:
+        msg = build_status_block(effective_seconds, member, bool(partner))
+        await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def cmd_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-
-    if not context.args:
-        await update.message.reply_text("Используй: /partner КОД")
-        return
-
-    if context.args[0].upper() != PARTNER_CODE.upper():
-        await update.message.reply_text("❌ Неверный код.")
-        return
-
     upsert_user(user.id)
-    set_partner(user.id)
+    set_awaiting_article(user.id, True)
+    await update.message.reply_text(PARTNER_MSG, parse_mode="HTML", disable_web_page_preview=True)
 
+
+async def handle_article_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    row = get_user(user.id)
+    if not row or not row[7]:  # awaiting_article = 0
+        return
+
+    # Forward submission to admin
+    username = f"@{user.username}" if user.username else f"ID:{user.id}"
+    caption  = f"📨 New article submission\nFrom: {username} (ID: {user.id})"
+    try:
+        if update.message.document:
+            await context.bot.send_document(ADMIN_ID, update.message.document.file_id, caption=caption)
+        elif update.message.photo:
+            await context.bot.send_photo(ADMIN_ID, update.message.photo[-1].file_id, caption=caption)
+        elif update.message.text:
+            await context.bot.send_message(ADMIN_ID, f"{caption}\n\n{update.message.text}")
+        else:
+            await context.bot.forward_message(ADMIN_ID, update.message.chat_id, update.message.message_id)
+    except Exception as e:
+        logger.warning(f"Could not forward article from {user.id} to admin: {e}")
+
+    set_awaiting_article(user.id, False)
     await update.message.reply_text(
-        f"🤝 Твой VIP статус: <b>Partner</b>\n\n"
-        f"Тебе доступны все фреймворки библиотеки.\n\n"
-        f"Твой код: <code>{PARTNER_CODE}</code>\n"
-        f"Один код открывает весь контент.\n\n"
-        f"Введи на <a href=\"https://library.vipcare.io\">library.vipcare.io</a>",
-        parse_mode="HTML",
-        disable_web_page_preview=True
+        "🙏 Спасибо за ваш вклад!\n\n"
+        "Нам понадобится несколько дней на ревью — мы вернёмся с обратной связью."
     )
 
 
@@ -413,16 +414,15 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
         eff = active_sec
         if is_sub and last_sub_start:
-            eff += int((datetime.utcnow() - datetime.fromisoformat(last_sub_start)).total_seconds())
+            eff += int((utcnow() - parse_iso(last_sub_start)).total_seconds())
         tier = get_current_tier(eff)
         name = tier[0] if tier else "Entry"
         counts[name] = counts.get(name, 0) + 1
 
     await update.message.reply_text(
         f"📊 <b>VIPcare Stats</b>\n\n"
-        f"👥 Всего пользователей: <b>{total}</b>\n"
-        f"📡 Подписаны: <b>{subscribed}</b> · Отписались: <b>{total - subscribed}</b>\n\n"
-        f"<b>VIP сегменты:</b>\n"
+        f"👥 Total: <b>{total}</b> · Subscribed: <b>{subscribed}</b> · Left: <b>{total - subscribed}</b>\n\n"
+        f"<b>VIP segments:</b>\n"
         f"🆕 Entry: {counts.get('Entry', 0)}\n"
         f"🥉 Bronze: {counts.get('Bronze', 0)}\n"
         f"🥈 Silver: {counts.get('Silver', 0)}\n"
@@ -433,6 +433,23 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🤝 Partner: {partners}",
         parse_mode="HTML"
     )
+
+
+async def cmd_addpartner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin-only: /addpartner USER_ID — grants Partner status."""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /addpartner USER_ID")
+        return
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID.")
+        return
+    upsert_user(target_id)
+    set_partner(target_id)
+    await update.message.reply_text(f"✅ Partner status granted to user {target_id}.")
 
 
 async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -453,17 +470,39 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"User {user_id} unsubscribed — timer frozen.")
 
 
+async def job_check_tier_upgrades(context: ContextTypes.DEFAULT_TYPE):
+    """Runs every 6 hours — proactively notifies subscribed users who levelled up."""
+    with sqlite3.connect(DB_PATH) as c:
+        rows = c.execute(
+            "SELECT user_id, active_seconds, last_sub_start, is_subscribed, highest_sent "
+            "FROM users WHERE is_subscribed = 1 AND partner = 0"
+        ).fetchall()
+
+    for uid, active_sec, last_sub_start, is_sub, highest_sent in rows:
+        eff = active_sec
+        if is_sub and last_sub_start:
+            eff += int((utcnow() - parse_iso(last_sub_start)).total_seconds())
+        await maybe_notify_new_tier(context, uid, eff, highest_sent or "")
+
+
 # ── MAIN ────────────────────────────────────────────────────────────────────
 
 def main():
     init_db()
     app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start",   cmd_start))
-    app.add_handler(CommandHandler("code",    cmd_code))
-    app.add_handler(CommandHandler("partner", cmd_partner))
-    app.add_handler(CommandHandler("stats",   cmd_stats))
+    app.add_handler(CommandHandler("start",      cmd_start))
+    app.add_handler(CommandHandler("partner",    cmd_partner))
+    app.add_handler(CommandHandler("stats",      cmd_stats))
+    app.add_handler(CommandHandler("addpartner", cmd_addpartner))
     app.add_handler(ChatMemberHandler(track_member, ChatMemberHandler.CHAT_MEMBER))
+    app.add_handler(MessageHandler(
+        (filters.Document.ALL | filters.PHOTO | (filters.TEXT & ~filters.COMMAND)),
+        handle_article_submission
+    ))
+
+    # Check for tier upgrades every 6 hours, first run after 2 minutes
+    app.job_queue.run_repeating(job_check_tier_upgrades, interval=21600, first=120)
 
     logger.info("VIPcare bot started.")
     app.run_polling(allowed_updates=["message", "chat_member"])
