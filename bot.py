@@ -84,18 +84,17 @@ WELCOME = (
 
 PARTNER_MSG = (
     "✍️ <b>Стать автором VIPCare Library</b>\n\n"
-    "Спасибо за интерес! Мы с удовольствием рассмотрим вашу статью.\n\n"
-    "Все релевантные материалы публикуются в VIPCare Library:\n"
-    "✅ С указанием автора и гиперссылкой на ваш LinkedIn\n"
-    "✅ С отдельным постом в нашем TG-канале\n\n"
-    "Единственное условие — материал должен быть реально полезным "
-    "для iGaming-ниши и пройти наш редакционный аудит.\n\n"
-    "📨 <b>Отправьте материал прямо сюда в формате:</b>\n"
-    "• Файл статьи (PDF, DOCX или ссылка на Google Docs)\n"
-    "• Имя автора\n"
-    "• Ваш никнейм в Telegram\n\n"
-    "Рассмотрим в течение нескольких дней и дадим обратную связь."
+    "Спасибо за интерес! Все принятые материалы публикуются с:\n"
+    "✅ Указанием автора и гиперссылкой на ваш LinkedIn\n"
+    "✅ Отдельным постом в нашем TG-канале\n\n"
+    "Единственное условие — материал должен быть реально полезным для iGaming-ниши.\n\n"
+    "📎 <b>Отправьте вашу статью (PDF или DOCX):</b>"
 )
+
+ACCEPTED_MIME = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 
 
 def get_code(env_var: str) -> str:
@@ -224,12 +223,10 @@ def set_partner(user_id: int):
         c.execute("UPDATE users SET partner = 1 WHERE user_id = ?", (user_id,))
 
 
-def set_awaiting_article(user_id: int, value: bool):
+def set_partner_step(user_id: int, step: int):
+    """0 = idle, 1 = waiting for document, 2 = waiting for LinkedIn."""
     with sqlite3.connect(DB_PATH) as c:
-        c.execute(
-            "UPDATE users SET awaiting_article = ? WHERE user_id = ?",
-            (1 if value else 0, user_id)
-        )
+        c.execute("UPDATE users SET awaiting_article = ? WHERE user_id = ?", (step, user_id))
 
 
 # ── HELPERS ─────────────────────────────────────────────────────────────────
@@ -361,36 +358,67 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user.id)
-    set_awaiting_article(user.id, True)
+    set_partner_step(user.id, 1)
     await update.message.reply_text(PARTNER_MSG, parse_mode="HTML", disable_web_page_preview=True)
 
 
-async def handle_article_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     row = get_user(user.id)
-    if not row or not row[7]:  # awaiting_article = 0
+    if not row:
         return
 
-    # Forward submission to admin
-    username = f"@{user.username}" if user.username else f"ID:{user.id}"
-    caption  = f"📨 New article submission\nFrom: {username} (ID: {user.id})"
-    try:
-        if update.message.document:
-            await context.bot.send_document(ADMIN_ID, update.message.document.file_id, caption=caption)
-        elif update.message.photo:
-            await context.bot.send_photo(ADMIN_ID, update.message.photo[-1].file_id, caption=caption)
-        elif update.message.text:
-            await context.bot.send_message(ADMIN_ID, f"{caption}\n\n{update.message.text}")
-        else:
-            await context.bot.forward_message(ADMIN_ID, update.message.chat_id, update.message.message_id)
-    except Exception as e:
-        logger.warning(f"Could not forward article from {user.id} to admin: {e}")
+    step = row[7]  # awaiting_article column reused as step counter
+    if step == 0:
+        return
 
-    set_awaiting_article(user.id, False)
-    await update.message.reply_text(
-        "🙏 Спасибо за ваш вклад!\n\n"
-        "Нам понадобится несколько дней на ревью — мы вернёмся с обратной связью."
-    )
+    username = f"@{user.username}" if user.username else f"(ID:{user.id})"
+
+    # ── Step 1: waiting for PDF/DOCX ────────────────────────────────────────
+    if step == 1:
+        if not update.message.document:
+            await update.message.reply_text("📎 Пожалуйста, пришлите файл (PDF или DOCX).")
+            return
+
+        mime = update.message.document.mime_type or ""
+        if mime not in ACCEPTED_MIME:
+            await update.message.reply_text(
+                "❌ Принимаем только PDF или DOCX.\n\nПожалуйста, пришлите файл в одном из этих форматов."
+            )
+            return
+
+        try:
+            await context.bot.send_document(
+                ADMIN_ID,
+                update.message.document.file_id,
+                caption=f"📨 Новая статья\nОт: {username} (ID: {user.id})"
+            )
+        except Exception as e:
+            logger.warning(f"Could not forward document from {user.id}: {e}")
+
+        set_partner_step(user.id, 2)
+        await update.message.reply_text("Спасибо! Теперь пришлите вашу ссылку на LinkedIn:")
+        return
+
+    # ── Step 2: waiting for LinkedIn URL ────────────────────────────────────
+    if step == 2:
+        if not update.message.text:
+            await update.message.reply_text("🔗 Пожалуйста, пришлите ссылку на LinkedIn текстом.")
+            return
+
+        try:
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"🔗 LinkedIn от {username} (ID: {user.id}):\n{update.message.text}"
+            )
+        except Exception as e:
+            logger.warning(f"Could not forward LinkedIn from {user.id}: {e}")
+
+        set_partner_step(user.id, 0)
+        await update.message.reply_text(
+            "🙏 Отлично! Спасибо за ваш вклад.\n\n"
+            "Рассмотрим в течение нескольких дней и вернёмся с обратной связью."
+        )
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -498,7 +526,7 @@ def main():
     app.add_handler(ChatMemberHandler(track_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(
         (filters.Document.ALL | filters.PHOTO | (filters.TEXT & ~filters.COMMAND)),
-        handle_article_submission
+        handle_message
     ))
 
     # Check for tier upgrades every 6 hours, first run after 2 minutes
