@@ -28,6 +28,8 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 ADMIN_ID     = int(os.environ.get("ADMIN_ID", "0"))
 PARTNER_CODE = os.environ.get("TIER_PARTNER", "VIPCARE-G4L8V")
 
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "vipcare_bot")
+
 # (name, days_required, env_var, emoji)
 TIERS = [
     ("Bronze",   3,   "TIER_BRONZE",   "🥉"),
@@ -81,6 +83,7 @@ WELCOME = (
     "от лидеров индустрии iGaming.\n\n"
     "<b>Команды:</b>\n"
     "/start — проверить статус + получить код\n"
+    "/referral — пригласить коллегу и получить бонус\n"
     "/partner — хочешь стать автором новой статьи"
 )
 
@@ -156,24 +159,34 @@ def init_db():
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
-                    user_id            BIGINT PRIMARY KEY,
-                    active_seconds     INTEGER DEFAULT 0,
-                    last_sub_start     TEXT,
-                    is_subscribed      INTEGER DEFAULT 0,
-                    partner            INTEGER DEFAULT 0,
-                    highest_sent       TEXT DEFAULT '',
-                    check_count        INTEGER DEFAULT 0,
-                    check_window_start TEXT,
-                    awaiting_article   INTEGER DEFAULT 0
+                    user_id             BIGINT PRIMARY KEY,
+                    active_seconds      INTEGER DEFAULT 0,
+                    last_sub_start      TEXT,
+                    is_subscribed       INTEGER DEFAULT 0,
+                    partner             INTEGER DEFAULT 0,
+                    highest_sent        TEXT DEFAULT '',
+                    check_count         INTEGER DEFAULT 0,
+                    check_window_start  TEXT,
+                    awaiting_article    INTEGER DEFAULT 0,
+                    referred_by         BIGINT DEFAULT NULL,
+                    ref_bonus_join      INTEGER DEFAULT 0,
+                    ref_bonus_bronze    INTEGER DEFAULT 0
                 )
             """)
 
-            if cols and "awaiting_article" not in cols:
-                try:
-                    cur.execute("ALTER TABLE users ADD COLUMN awaiting_article INTEGER DEFAULT 0")
-                    logger.info("Migrated: added awaiting_article column.")
-                except Exception:
-                    pass
+            # Live migrations for existing deployments
+            for col, definition in [
+                ("awaiting_article", "INTEGER DEFAULT 0"),
+                ("referred_by",      "BIGINT DEFAULT NULL"),
+                ("ref_bonus_join",   "INTEGER DEFAULT 0"),
+                ("ref_bonus_bronze", "INTEGER DEFAULT 0"),
+            ]:
+                if cols and col not in cols:
+                    try:
+                        cur.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+                        logger.info(f"Migrated: added {col} column.")
+                    except Exception:
+                        pass
 
 
 def get_user(user_id: int):
@@ -181,20 +194,23 @@ def get_user(user_id: int):
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT active_seconds, last_sub_start, is_subscribed, partner, "
-                "highest_sent, check_count, check_window_start, awaiting_article "
+                "highest_sent, check_count, check_window_start, awaiting_article, "
+                "referred_by, ref_bonus_join, ref_bonus_bronze "
                 "FROM users WHERE user_id = %s",
                 (user_id,)
             )
             return cur.fetchone()
 
 
-def upsert_user(user_id: int):
+def upsert_user(user_id: int) -> bool:
+    """Returns True if user was newly created."""
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING",
                 (user_id,)
             )
+            return cur.rowcount > 0
 
 
 def set_subscribed(user_id: int, subscribed: bool):
@@ -254,10 +270,7 @@ def mark_highest_sent(user_id: int, tier_name: str):
 def set_partner(user_id: int):
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET partner = 1 WHERE user_id = %s",
-                (user_id,)
-            )
+            cur.execute("UPDATE users SET partner = 1 WHERE user_id = %s", (user_id,))
 
 
 def set_partner_step(user_id: int, step: int):
@@ -267,6 +280,73 @@ def set_partner_step(user_id: int, step: int):
                 "UPDATE users SET awaiting_article = %s WHERE user_id = %s",
                 (step, user_id)
             )
+
+
+def set_referred_by(user_id: int, referrer_id: int):
+    """Only set once — never overwrite an existing referrer."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET referred_by = %s WHERE user_id = %s AND referred_by IS NULL",
+                (referrer_id, user_id)
+            )
+
+
+def give_ref_bonus_join(referrer_id: int, referred_id: int):
+    """Both users get +1 day. Mark flag on referred user so it's given only once."""
+    seconds = 86400
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET active_seconds = active_seconds + %s, ref_bonus_join = 1 "
+                "WHERE user_id = %s AND ref_bonus_join = 0",
+                (seconds, referred_id)
+            )
+            if cur.rowcount > 0:
+                cur.execute(
+                    "UPDATE users SET active_seconds = active_seconds + %s WHERE user_id = %s",
+                    (seconds, referrer_id)
+                )
+                return True
+    return False
+
+
+def give_ref_bonus_bronze(referrer_id: int, referred_id: int):
+    """Both users get +2 days when referred reaches Bronze. Given only once."""
+    seconds = 2 * 86400
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET active_seconds = active_seconds + %s, ref_bonus_bronze = 1 "
+                "WHERE user_id = %s AND ref_bonus_bronze = 0",
+                (seconds, referred_id)
+            )
+            if cur.rowcount > 0:
+                cur.execute(
+                    "UPDATE users SET active_seconds = active_seconds + %s WHERE user_id = %s",
+                    (seconds, referrer_id)
+                )
+                return True
+    return False
+
+
+def get_referral_stats(user_id: int) -> tuple[int, int]:
+    """Returns (total_referred, total_bonus_days)."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*), "
+                "SUM(CASE WHEN ref_bonus_join = 1 THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN ref_bonus_bronze = 1 THEN 1 ELSE 0 END) "
+                "FROM users WHERE referred_by = %s",
+                (user_id,)
+            )
+            row = cur.fetchone()
+            total    = row[0] or 0
+            join_cnt = row[1] or 0
+            brnz_cnt = row[2] or 0
+            bonus_days = join_cnt * 1 + brnz_cnt * 2
+            return total, bonus_days
 
 
 # ── HELPERS ─────────────────────────────────────────────────────────────────
@@ -319,6 +399,33 @@ async def maybe_notify_new_tier(context: ContextTypes.DEFAULT_TYPE, user_id: int
         return False
 
     mark_highest_sent(user_id, name)
+
+    # Bronze reached — check if referral bronze bonus applies
+    if name == "Bronze":
+        row = get_user(user_id)
+        if row:
+            referrer_id   = row[8]
+            ref_bon_bronze = row[10]
+            if referrer_id and not ref_bon_bronze:
+                given = give_ref_bonus_bronze(referrer_id, user_id)
+                if given:
+                    bonus_msg = (
+                        "🎁 <b>Реферальный бонус!</b>\n\n"
+                        "Твой друг достиг Bronze — вы оба получили <b>+2 дня</b> к таймеру. "
+                        "Так держать 💪"
+                    )
+                    try:
+                        await context.bot.send_message(
+                            referrer_id, bonus_msg,
+                            parse_mode="HTML"
+                        )
+                        await context.bot.send_message(
+                            user_id, bonus_msg,
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not send bronze bonus notification: {e}")
+
     return True
 
 
@@ -372,16 +479,81 @@ def build_status_block(effective_seconds: int, is_member: bool, partner: bool) -
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    upsert_user(user.id)
+    is_new = upsert_user(user.id)
+
+    # Handle referral link: /start ref_12345
+    # Anti-abuse: only new users can be referred (is_new=True)
+    referrer_id = None
+    if is_new and context.args:
+        arg = context.args[0]
+        if arg.startswith("ref_"):
+            try:
+                ref_id = int(arg[4:])
+                if ref_id != user.id:  # can't refer yourself
+                    set_referred_by(user.id, ref_id)
+                    referrer_id = ref_id
+            except ValueError:
+                pass
 
     await update.message.reply_text(WELCOME, parse_mode="HTML", disable_web_page_preview=True)
+
+    # Send referral welcome message to the new user
+    if referrer_id:
+        try:
+            referrer_chat = await context.bot.get_chat(referrer_id)
+            if referrer_chat.username:
+                referrer_mention = f"@{referrer_chat.username}"
+            else:
+                referrer_mention = f"<b>{referrer_chat.first_name}</b>"
+        except Exception:
+            referrer_mention = "твоим другом"
+
+        ref_welcome = (
+            f"👋 Вижу, ты пришёл от {referrer_mention} - это круто!\n\n"
+            f"Скажи ему спасибо за рекомендацию - ты попал в нужное место. "
+            f"Здесь собираются лидеры VIP-направления iGaming индустрии.\n\n"
+            f"Подпишись на @vipcare_io и твой таймер начнёт считать - "
+            f"через 3 дня откроется первый материал библиотеки 🔓"
+        )
+        await update.message.reply_text(ref_welcome, parse_mode="HTML", disable_web_page_preview=True)
+
+        # Notify referrer that their referral just joined
+        referrer_notify = (
+            f"❤️ Видим твоего реферала - спасибо, что улучшаешь наше комьюнити. "
+            f"Мы это ценим!"
+        )
+        try:
+            await context.bot.send_message(
+                referrer_id, referrer_notify,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.warning(f"Could not notify referrer {referrer_id} about join: {e}")
 
     member = await is_channel_member(context.bot, user.id)
     set_subscribed(user.id, member)
 
+    # Give join bonus if referral link was used AND user is already in channel
+    if referrer_id and member:
+        given = give_ref_bonus_join(referrer_id, user.id)
+        if given:
+            bonus_msg = (
+                "🎁 <b>Реферальный бонус!</b>\n\n"
+                "Твой друг уже в канале — вы оба получили <b>+1 день</b> к таймеру.\n"
+                "Когда он достигнет Bronze — ещё <b>+2 дня</b> каждому 💪"
+            )
+            try:
+                await context.bot.send_message(
+                    referrer_id, bonus_msg,
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.warning(f"Could not notify referrer {referrer_id}: {e}")
+            await update.message.reply_text(bonus_msg, parse_mode="HTML")
+
     effective_seconds, _ = get_effective_seconds(user.id)
     row = get_user(user.id)
-    _, _, _, partner, highest_sent, _, _, _ = row
+    _, _, _, partner, highest_sent, _, _, _, _, _, _ = row
 
     upgraded = False
     if member and not partner:
@@ -390,6 +562,29 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not upgraded:
         msg = build_status_block(effective_seconds, member, bool(partner))
         await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
+
+
+async def cmd_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    upsert_user(user.id)
+
+    ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user.id}"
+    total_referred, bonus_days = get_referral_stats(user.id)
+
+    msg = (
+        f"👥 <b>Реферальная программа VIPCare</b>\n\n"
+        f"Приглашай коллег из iGaming — получайте бонусные дни вместе:\n\n"
+        f"<b>+1 день</b> тебе и другу — если он уже подписан на @vipcare_io\n"
+        f"<b>+2 дня</b> тебе и другу — когда он достигнет 🥉 Bronze\n\n"
+        f"🔗 <b>Твоя ссылка:</b>\n"
+        f"<code>{ref_link}</code>\n\n"
+        f"📊 <b>Статистика:</b>\n"
+        f"Приглашено: <b>{total_referred}</b> чел.\n"
+        f"Заработано: <b>+{bonus_days}</b> дн.\n\n"
+        f"<i>Бонус начисляется только новым участникам — "
+        f"тем, кто впервые запускает бота по твоей ссылке.</i>"
+    )
+    await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def cmd_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -557,6 +752,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start",      cmd_start))
+    app.add_handler(CommandHandler("referral",   cmd_referral))
     app.add_handler(CommandHandler("partner",    cmd_partner))
     app.add_handler(CommandHandler("stats",      cmd_stats))
     app.add_handler(CommandHandler("addpartner", cmd_addpartner))
