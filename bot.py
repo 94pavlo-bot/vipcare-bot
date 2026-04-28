@@ -741,9 +741,8 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id    = result.new_chat_member.user.id
     new_status = result.new_chat_member.status
 
-    upsert_user(user_id)
-
     if new_status == "member":
+        upsert_user(user_id)
         set_subscribed(user_id, True)
         logger.info(f"User {user_id} subscribed — timer started.")
 
