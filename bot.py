@@ -44,29 +44,25 @@ TIER_NAMES = [t[0] for t in TIERS]
 TIER_UPGRADE_MESSAGES = {
     "Bronze": (
         "🥉 Ты достиг статуса <b>Bronze</b> - добро пожаловать в круг своих!\n\n"
-        "Первая статья VIPCare Library теперь открыта. "
-        "Это только начало. Продолжай 🚀"
+        "Библиотека начинает открываться для тебя. Это только начало. Продолжай 🚀"
     ),
     "Silver": (
         "🥈 Статус <b>Silver</b> получен - ты уже впереди большинства.\n\n"
-        "Две недели в канале, и библиотека продолжает открываться для тебя. "
-        "На этом уровне - уже реальные инсайты. Держись курса."
+        "Две недели в канале. Новые материалы библиотеки теперь твои. Держись курса."
     ),
     "Gold": (
         "🥇 <b>Gold</b> - ты реально это заслужил.\n\n"
-        "30 дней постоянства. Три премиум-фреймворка теперь твои. "
+        "30 дней постоянства. Доступ к библиотеке растёт. "
         "Здесь работают серьёзные VIP-операторы. Ты один из них."
     ),
     "Platinum": (
         "🪩 Статус <b>Platinum</b> достигнут - два месяца в строю.\n\n"
         "Ты в редкой группе операторов, которые реально вкладываются в своё развитие. "
-        "Четыре эксклюзивных материала теперь открыты. "
         "Разрыв между тобой и средним оператором только растёт."
     ),
     "Diamond": (
         "💎 <b>Diamond</b>. Серьёзно впечатляет.\n\n"
         "Три месяца стабильного присутствия - ты в топ-1% нашего комьюнити. "
-        "Пять статей библиотеки - все твои. "
         "Вот как выглядит настоящая вовлечённость."
     ),
     "Supreme": (
@@ -375,11 +371,47 @@ async def maybe_notify_new_tier(context: ContextTypes.DEFAULT_TYPE, user_id: int
         return False
 
     code = get_code(env_var)
-    base_msg = TIER_UPGRADE_MESSAGES.get(name, f"{emoji} You've reached <b>{name}</b>!")
+    base_msg = TIER_UPGRADE_MESSAGES.get(name, f"{emoji} Ты достиг статуса <b>{name}</b>!")
+
+    # Check referral bronze bonus — applies at Bronze threshold or higher, regardless of which tier we're notifying
+    ref_bonus_line = ""
+    bronze_seconds = TIERS[0][1] * 86400  # 3 days
+    row = get_user(user_id)
+    if row:
+        referrer_id    = row[8]
+        ref_bon_bronze = row[10]
+        if referrer_id and not ref_bon_bronze and effective_seconds >= bronze_seconds:
+            given = give_ref_bonus_bronze(referrer_id, user_id)
+            if given:
+                if name == "Bronze":
+                    try:
+                        referrer_chat = await context.bot.get_chat(referrer_id)
+                        referrer_mention = (
+                            f"@{referrer_chat.username}" if referrer_chat.username
+                            else f"<b>{referrer_chat.first_name}</b>"
+                        )
+                    except Exception:
+                        referrer_mention = "тому, кто тебя пригласил"
+                    ref_bonus_line = (
+                        f"\n\n🎁 <b>+48 CP</b> — ты пришёл от {referrer_mention}. "
+                        f"Вы оба получили бонус за Bronze 💪"
+                    )
+                try:
+                    await context.bot.send_message(
+                        referrer_id,
+                        "🎁 <b>Реферальный бонус!</b>\n\n"
+                        "Твой друг достиг Bronze - вы оба получили <b>+48 CP</b>. "
+                        "Так держать 💪",
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not notify referrer {referrer_id} about bronze: {e}")
+
     full_msg = (
         f"{base_msg}\n\n"
-        f"Your access code: <code>{code}</code>\n"
+        f"Твой код: <code>{code}</code>\n"
         f"→ <a href=\"https://library.vipcare.io\">library.vipcare.io</a>"
+        f"{ref_bonus_line}"
     )
 
     try:
@@ -393,33 +425,6 @@ async def maybe_notify_new_tier(context: ContextTypes.DEFAULT_TYPE, user_id: int
         return False
 
     mark_highest_sent(user_id, name)
-
-    # Bronze reached — check if referral bronze bonus applies
-    if name == "Bronze":
-        row = get_user(user_id)
-        if row:
-            referrer_id   = row[8]
-            ref_bon_bronze = row[10]
-            if referrer_id and not ref_bon_bronze:
-                given = give_ref_bonus_bronze(referrer_id, user_id)
-                if given:
-                    bonus_msg = (
-                        "🎁 <b>Реферальный бонус!</b>\n\n"
-                        "Твой друг достиг Bronze — вы оба получили <b>+48 CP</b>. "
-                        "Так держать 💪"
-                    )
-                    try:
-                        await context.bot.send_message(
-                            referrer_id, bonus_msg,
-                            parse_mode="HTML"
-                        )
-                        await context.bot.send_message(
-                            user_id, bonus_msg,
-                            parse_mode="HTML"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not send bronze bonus notification: {e}")
-
     return True
 
 
@@ -541,8 +546,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try:
                     await context.bot.send_message(
                         referrer_id,
-                        f"❤️ Видим твоего реферала - спасибо, что улучшаешь наше комьюнити. Мы это ценим!\n\n"
-                        f"🎁 <b>+24 CP</b> зачислено вам обоим - он уже в канале!",
+                        "Видим твоего реферала - спасибо, что улучшаешь наше комьюнити. Мы это ценим! ❤️\n\n"
+                        "Вы оба получили <b>+24 CP</b>! Когда он достигнет 🥉 Bronze добавим ещё <b>+48 CP</b> каждому.",
                         parse_mode="HTML"
                     )
                 except Exception as e:
@@ -561,14 +566,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"/referral - пригласить коллегу (бонус обоим)\n"
                 f"/partner - стать автором библиотеки"
             )
-            try:
-                await context.bot.send_message(
-                    referrer_id,
-                    "❤️ Видим твоего реферала - спасибо, что улучшаешь наше комьюнити. Мы это ценим!",
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logger.warning(f"Could not notify referrer {referrer_id} about join: {e}")
 
         await update.message.reply_text(ref_block, parse_mode="HTML", disable_web_page_preview=True)
         return
@@ -871,8 +868,8 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     try:
                         await context.bot.send_message(
                             referrer_id,
-                            "🎁 Твой реферал подписался на канал - вы оба получили <b>+24 CP</b>!\n"
-                            "Когда он достигнет 🥉 Bronze - ещё <b>+48 CP</b> каждому 💪",
+                            "Видим твоего реферала - спасибо, что улучшаешь наше комьюнити. Мы это ценим! ❤️\n\n"
+                            "Вы оба получили <b>+24 CP</b>! Когда он достигнет 🥉 Bronze добавим ещё <b>+48 CP</b> каждому.",
                             parse_mode="HTML"
                         )
                     except Exception as e:
