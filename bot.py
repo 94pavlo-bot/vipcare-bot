@@ -570,7 +570,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(ref_block, parse_mode="HTML", disable_web_page_preview=True)
         if not member:
             await update.message.reply_text(
-                "Чтобы получить VIP статус - подпишись на @vipcare_io 👇\nt.me/vipcare_io",
+                "Чтобы получить VIP статус - подпишись 👉 @vipcare_io",
                 disable_web_page_preview=True
             )
         return
