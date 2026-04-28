@@ -459,23 +459,24 @@ def build_status_block(effective_seconds: int, is_member: bool, partner: bool) -
         next_name, next_days, _, next_emoji = nxt
         left_cp = to_cp(next_days * 86400 - effective_seconds)
         return (
-            f"Твой статус 🆕 <b>Entry</b> · <b>{cp} CP</b>\n"
-            f"До статуса {next_emoji} <b>{next_name}</b> осталось <b>{left_cp} CP</b>.\n\n"
-            f"<i>1 час в @vipcare_io = 1 CP 🔔</i>\n\n"
+            f"У тебя <b>{cp} CP</b> 🪙 и статус 🆕 <b>Entry</b>\n"
+            f"До статуса {next_emoji} <b>{next_name}</b> осталось <b>{left_cp} CP</b> 🪙\n\n"
+            f"<i>1 час в @vipcare_io = 1 CP 🪙</i>\n"
+            f"<i>1 день в @vipcare_io = 24 CP 🪙</i>\n\n"
             f"👥 Пригласи коллегу и получите бонусные CP → /referral"
         )
 
     name, _, env_var, emoji = current
     code = get_code(env_var)
     msg = (
-        f"Твой статус {emoji} <b>{name}</b> · <b>{cp} CP</b>\n\n"
+        f"У тебя <b>{cp} CP</b> 🪙 и статус {emoji} <b>{name}</b>\n\n"
         f"Твой код: <code>{code}</code>\n"
         f"→ <a href=\"https://library.vipcare.io\">library.vipcare.io</a>\n"
     )
     if nxt:
         next_name, next_days, _, next_emoji = nxt
         left_cp = to_cp(next_days * 86400 - effective_seconds)
-        msg += f"\nДо статуса {next_emoji} <b>{next_name}</b> осталось <b>{left_cp} CP</b>."
+        msg += f"\nДо статуса {next_emoji} <b>{next_name}</b> осталось <b>{left_cp} CP</b> 🪙"
     else:
         msg += "\n👑 Максимальный статус достигнут. Уважение!"
     msg += "\n\n👥 Пригласи коллегу и получите бонусные CP → /referral"
@@ -604,7 +605,7 @@ async def cmd_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<code>{ref_link}</code>\n\n"
         f"📊 <b>Статистика:</b>\n"
         f"Приглашено: <b>{total_referred}</b> чел.\n"
-        f"Заработано: <b>+{bonus_days}</b> дн.\n\n"
+        f"Заработано: <b>+{bonus_days * 24} CP</b> 🪙\n\n"
         f"<i>Бонус начисляется только новым участникам — "
         f"тем, кто впервые запускает бота по твоей ссылке.</i>"
     )
