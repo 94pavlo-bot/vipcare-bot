@@ -532,7 +532,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ref_block = (
                 f"👋 Вижу, ты пришёл от {referrer_mention} - это круто!\n\n"
                 f"Скажи ему спасибо - ты попал в нужное место. "
-                f"Здесь собираются лидеры VIP-направления iGaming индустрии.\n\n"
+                f"Здесь собираются лидеры разных направлений iGaming индустрии.\n\n"
                 f"{next_line}"
                 f"{bonus_line}\n"
                 f"Когда достигнешь Bronze - ещё <b>+48 CP</b> вам обоим 💪\n\n"
@@ -557,7 +557,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ref_block = (
                 f"👋 Вижу, ты пришёл от {referrer_mention} - это круто!\n\n"
                 f"Скажи ему спасибо - ты попал в нужное место. "
-                f"Здесь собираются лидеры VIP-направления iGaming индустрии.\n\n"
+                f"Здесь собираются лидеры разных направлений iGaming индустрии.\n\n"
                 f"Вступай в @vipcare_io\n"
                 f"Каждый час в канале +1 CP.\n"
                 f"72 CP = 🥉 Bronze статус. Это бесплатно.\n\n"
@@ -568,6 +568,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         await update.message.reply_text(ref_block, parse_mode="HTML", disable_web_page_preview=True)
+        if not member:
+            await update.message.reply_text(
+                "Чтобы получить VIP статус - подпишись на @vipcare_io 👇\nt.me/vipcare_io",
+                disable_web_page_preview=True
+            )
         return
 
     # Regular (non-referred) user
