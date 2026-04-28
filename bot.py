@@ -43,37 +43,37 @@ TIER_NAMES = [t[0] for t in TIERS]
 
 TIER_UPGRADE_MESSAGES = {
     "Bronze": (
-        "🥉 You've reached <b>Bronze</b> status — welcome to the inner circle!\n\n"
-        "Your first article from the VIPCare Library is now unlocked. "
-        "This is just the beginning. Keep it up 🚀"
+        "🥉 Ты достиг статуса <b>Bronze</b> - добро пожаловать в круг своих!\n\n"
+        "Первая статья VIPCare Library теперь открыта. "
+        "Это только начало. Продолжай 🚀"
     ),
     "Silver": (
-        "🥈 <b>Silver</b> status unlocked — you're ahead of the crowd.\n\n"
-        "Two weeks in, and the library keeps opening up for you. "
-        "The insights at this level are the real deal. Stay consistent."
+        "🥈 Статус <b>Silver</b> получен - ты уже впереди большинства.\n\n"
+        "Две недели в канале, и библиотека продолжает открываться для тебя. "
+        "На этом уровне - уже реальные инсайты. Держись курса."
     ),
     "Gold": (
-        "🥇 <b>Gold</b> — you've genuinely earned this.\n\n"
-        "30 days of commitment. Three premium frameworks are now yours. "
-        "This is where serious VIP operators operate. You belong here."
+        "🥇 <b>Gold</b> - ты реально это заслужил.\n\n"
+        "30 дней постоянства. Три премиум-фреймворка теперь твои. "
+        "Здесь работают серьёзные VIP-операторы. Ты один из них."
     ),
     "Platinum": (
-        "🪩 <b>Platinum</b> status achieved — that's two months strong.\n\n"
-        "You're in a rare group of operators who actually invest in their craft. "
-        "Four exclusive pieces of content are now unlocked. "
-        "The gap between you and the average operator just got wider."
+        "🪩 Статус <b>Platinum</b> достигнут - два месяца в строю.\n\n"
+        "Ты в редкой группе операторов, которые реально вкладываются в своё развитие. "
+        "Четыре эксклюзивных материала теперь открыты. "
+        "Разрыв между тобой и средним оператором только растёт."
     ),
     "Diamond": (
-        "💎 <b>Diamond</b>. Seriously impressive.\n\n"
-        "Three months of consistent engagement puts you in the top 1% of our community. "
-        "Five library articles — all yours. "
-        "This is what commitment looks like."
+        "💎 <b>Diamond</b>. Серьёзно впечатляет.\n\n"
+        "Три месяца стабильного присутствия - ты в топ-1% нашего комьюнити. "
+        "Пять статей библиотеки - все твои. "
+        "Вот как выглядит настоящая вовлечённость."
     ),
     "Supreme": (
-        "👑 <b>Supreme</b>. The highest level — and you made it.\n\n"
-        "Six months. That's not luck, that's dedication. "
-        "You've unlocked the entire VIPCare Library — every framework, every playbook, everything we've built.\n\n"
-        "Welcome to the top. You belong here. 🏆"
+        "👑 <b>Supreme</b>. Высший уровень - и ты его достиг.\n\n"
+        "Полгода. Это не удача - это преданность делу. "
+        "Вся VIPCare Library открыта - каждый фреймворк, каждый плейбук, всё что мы создали.\n\n"
+        "Добро пожаловать на вершину. Ты здесь на своём месте. 🏆"
     ),
 }
 
@@ -405,7 +405,7 @@ async def maybe_notify_new_tier(context: ContextTypes.DEFAULT_TYPE, user_id: int
                 if given:
                     bonus_msg = (
                         "🎁 <b>Реферальный бонус!</b>\n\n"
-                        "Твой друг достиг Bronze — вы оба получили <b>+48 CP 🟡</b>. "
+                        "Твой друг достиг Bronze — вы оба получили <b>+48 CP</b>. "
                         "Так держать 💪"
                     )
                     try:
@@ -440,7 +440,7 @@ def build_status_block(effective_seconds: int, is_member: bool, partner: bool) -
         status_name  = current[0] if current else "Entry"
         if effective_seconds > 0:
             return (
-                f"⏸ Твой прогресс сохранён. Статус {status_emoji} <b>{status_name}</b> · <b>{cp} CP 🟡</b>.\n\n"
+                f"⏸ Твой прогресс сохранён. Статус {status_emoji} <b>{status_name}</b> · <b>{cp} CP</b>.\n\n"
                 f"Вступи обратно в @vipcare_io - таймер продолжит считать 👇\n"
                 f"t.me/vipcare_io"
             )
@@ -459,27 +459,27 @@ def build_status_block(effective_seconds: int, is_member: bool, partner: bool) -
         next_name, next_days, _, next_emoji = nxt
         left_cp = to_cp(next_days * 86400 - effective_seconds)
         return (
-            f"У тебя <b>{cp} CP 🟡</b> и статус 🆕 <b>Entry</b>\n"
-            f"До статуса {next_emoji} <b>{next_name}</b> осталось <b>{left_cp} CP 🟡</b>\n\n"
-            f"<i>1 час в @vipcare_io = 1 CP 🟡</i>\n"
-            f"<i>1 день в @vipcare_io = 24 CP 🟡</i>\n\n"
-            f"👥 Пригласи коллегу и получите бонусные CP 🟡 → /referral"
+            f"У тебя <b>{cp} CP</b> и статус 🆕 <b>Entry</b>\n"
+            f"До статуса {next_emoji} <b>{next_name}</b> осталось <b>{left_cp} CP</b>\n\n"
+            f"<i>1 час в @vipcare_io = 1 CP</i>\n"
+            f"<i>1 день в @vipcare_io = 24 CP</i>\n\n"
+            f"👥 Пригласи коллегу и получите бонусные CP → /referral"
         )
 
     name, _, env_var, emoji = current
     code = get_code(env_var)
     msg = (
-        f"У тебя <b>{cp} CP 🟡</b> и статус {emoji} <b>{name}</b>\n\n"
+        f"У тебя <b>{cp} CP</b> и статус {emoji} <b>{name}</b>\n\n"
         f"Твой код: <code>{code}</code>\n"
         f"→ <a href=\"https://library.vipcare.io\">library.vipcare.io</a>\n"
     )
     if nxt:
         next_name, next_days, _, next_emoji = nxt
         left_cp = to_cp(next_days * 86400 - effective_seconds)
-        msg += f"\nДо статуса {next_emoji} <b>{next_name}</b> осталось <b>{left_cp} CP 🟡</b>"
+        msg += f"\nДо статуса {next_emoji} <b>{next_name}</b> осталось <b>{left_cp} CP</b>"
     else:
         msg += "\n👑 Максимальный статус достигнут. Уважение!"
-    msg += "\n\n👥 Пригласи коллегу и получите бонусные CP 🟡 → /referral"
+    msg += "\n\n👥 Пригласи коллегу и получите бонусные CP → /referral"
     return msg
 
 
@@ -521,8 +521,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             nxt = get_next_tier(effective_seconds)
             cp = to_cp(effective_seconds)
             left_cp = to_cp(nxt[1] * 86400 - effective_seconds) if nxt else 0
-            next_line = f"Твой статус 🆕 <b>Entry</b> · <b>{cp} CP 🟡</b>. До 🥉 Bronze осталось <b>{left_cp} CP 🟡</b>." if nxt else ""
-            bonus_line = "\n\n🎁 <b>+24 CP 🟡</b> зачислено вам обоим - ты уже в канале!" if join_bonus_given else ""
+            next_line = f"Твой статус 🆕 <b>Entry</b> · <b>{cp} CP</b>. До 🥉 Bronze осталось <b>{left_cp} CP</b>." if nxt else ""
+            bonus_line = "\n\n🎁 <b>+24 CP</b> зачислено вам обоим - ты уже в канале!" if join_bonus_given else ""
 
             ref_block = (
                 f"👋 Вижу, ты пришёл от {referrer_mention} - это круто!\n\n"
@@ -530,8 +530,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Здесь собираются лидеры VIP-направления iGaming индустрии.\n\n"
                 f"{next_line}"
                 f"{bonus_line}\n"
-                f"Когда достигнешь Bronze - ещё <b>+48 CP 🟡</b> вам обоим 💪\n\n"
-                f"<i>1 час в @vipcare_io = 1 CP 🟡</i>\n\n"
+                f"Когда достигнешь Bronze - ещё <b>+48 CP</b> вам обоим 💪\n\n"
+                f"<i>1 час в @vipcare_io = 1 CP</i>\n\n"
                 f"<b>Команды:</b>\n"
                 f"/start - статус и код доступа\n"
                 f"/referral - пригласить коллегу (бонус обоим)\n"
@@ -542,7 +542,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(
                         referrer_id,
                         f"❤️ Видим твоего реферала - спасибо, что улучшаешь наше комьюнити. Мы это ценим!\n\n"
-                        f"🎁 <b>+24 CP 🟡</b> зачислено вам обоим - он уже в канале!",
+                        f"🎁 <b>+24 CP</b> зачислено вам обоим - он уже в канале!",
                         parse_mode="HTML"
                     )
                 except Exception as e:
@@ -554,8 +554,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Скажи ему спасибо - ты попал в нужное место. "
                 f"Здесь собираются лидеры VIP-направления iGaming индустрии.\n\n"
                 f"Вступай в @vipcare_io\n"
-                f"Каждый час в канале +1 CP 🟡.\n"
-                f"72 CP 🟡 = 🥉 Bronze статус. Это бесплатно.\n\n"
+                f"Каждый час в канале +1 CP.\n"
+                f"72 CP = 🥉 Bronze статус. Это бесплатно.\n\n"
                 f"<b>Команды:</b>\n"
                 f"/start - статус и код доступа\n"
                 f"/referral - пригласить коллегу (бонус обоим)\n"
@@ -598,14 +598,14 @@ async def cmd_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = (
         f"👥 <b>Реферальная программа VIPCare</b>\n\n"
-        f"Приглашай коллег из iGaming — получайте бонусные CP 🟡 вместе:\n\n"
-        f"<b>+24 CP 🟡</b> тебе и другу — если он уже подписан на @vipcare_io\n"
-        f"<b>+48 CP 🟡</b> тебе и другу — когда он достигнет 🥉 Bronze\n\n"
+        f"Приглашай коллег из iGaming — получайте бонусные CP вместе:\n\n"
+        f"<b>+24 CP</b> тебе и другу — если он уже подписан на @vipcare_io\n"
+        f"<b>+48 CP</b> тебе и другу — когда он достигнет 🥉 Bronze\n\n"
         f"🔗 <b>Твоя ссылка:</b>\n"
         f"<code>{ref_link}</code>\n\n"
         f"📊 <b>Статистика:</b>\n"
         f"Приглашено: <b>{total_referred}</b> чел.\n"
-        f"Заработано: <b>+{bonus_days * 24} CP 🟡</b>\n\n"
+        f"Заработано: <b>+{bonus_days * 24} CP</b>\n\n"
         f"<i>Бонус начисляется только новым участникам — "
         f"тем, кто впервые запускает бота по твоей ссылке.</i>"
     )
@@ -811,6 +811,13 @@ async def cmd_adddays(update: Update, context: ContextTypes.DEFAULT_TYPE):
             updated = cur.rowcount
     if updated:
         await update.message.reply_text(f"✅ User {target_id} +{days} дней добавлено.")
+        row = get_user(target_id)
+        if row:
+            effective_seconds, _ = get_effective_seconds(target_id)
+            highest_sent = row[4] or ""
+            partner = row[3]
+            if not partner:
+                await maybe_notify_new_tier(context, target_id, effective_seconds, highest_sent)
     else:
         await update.message.reply_text(f"❌ User {target_id} не найден в базе.")
 
@@ -855,8 +862,8 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     try:
                         await context.bot.send_message(
                             user_id,
-                            "🎁 <b>+24 CP 🟡</b> зачислено - ты подписался на канал!\n"
-                            "Когда достигнешь 🥉 Bronze - ещё <b>+48 CP 🟡</b> вам обоим 💪",
+                            "🎁 <b>+24 CP</b> зачислено - ты подписался на канал!\n"
+                            "Когда достигнешь 🥉 Bronze - ещё <b>+48 CP</b> вам обоим 💪",
                             parse_mode="HTML"
                         )
                     except Exception as e:
@@ -864,8 +871,8 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     try:
                         await context.bot.send_message(
                             referrer_id,
-                            "🎁 Твой реферал подписался на канал - вы оба получили <b>+24 CP 🟡</b>!\n"
-                            "Когда он достигнет 🥉 Bronze - ещё <b>+48 CP 🟡</b> каждому 💪",
+                            "🎁 Твой реферал подписался на канал - вы оба получили <b>+24 CP</b>!\n"
+                            "Когда он достигнет 🥉 Bronze - ещё <b>+48 CP</b> каждому 💪",
                             parse_mode="HTML"
                         )
                     except Exception as e:
