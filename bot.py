@@ -78,13 +78,14 @@ TIER_UPGRADE_MESSAGES = {
 }
 
 WELCOME = (
-    "👋 Добро пожаловать в VIPCare.io\n\n"
-    "Этот бот даёт доступ к <b>VIPCare Library</b> — статьи, фреймворки и модели "
-    "от лидеров индустрии iGaming.\n\n"
+    "👋 Привет!\n\n"
+    "Этот бот - твой доступ к <b>VIPCare Library</b>: закрытой базе знаний для VIP-менеджеров iGaming.\n\n"
+    "Фреймворки, статьи и модели от практиков отрасли.\n"
+    "Чем дольше ты с нами - выше VIP статус - больше доступа.\n\n"
     "<b>Команды:</b>\n"
-    "/start — проверить статус + получить код\n"
-    "/referral — пригласить коллегу и получить бонус\n"
-    "/partner — хочешь стать автором новой статьи"
+    "/start - проверить статус + получить код\n"
+    "/referral - пригласить коллегу и получить бонус\n"
+    "/partner - стать автором библиотеки"
 )
 
 PARTNER_MSG = (
@@ -695,6 +696,27 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /resetuser USER_ID")
+        return
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID.")
+        return
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM users WHERE user_id = %s", (target_id,))
+            deleted = cur.rowcount
+    if deleted:
+        await update.message.reply_text(f"✅ User {target_id} reset — как будто никогда не заходил.")
+    else:
+        await update.message.reply_text(f"❌ User {target_id} не найден в базе.")
+
+
 async def cmd_addpartner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -724,6 +746,34 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if new_status == "member":
         set_subscribed(user_id, True)
         logger.info(f"User {user_id} subscribed — timer started.")
+
+        # Give referral join bonus if user has a referrer and hasn't gotten it yet
+        row = get_user(user_id)
+        if row:
+            referrer_id    = row[8]
+            ref_bonus_join = row[9]
+            if referrer_id and not ref_bonus_join:
+                given = give_ref_bonus_join(referrer_id, user_id)
+                if given:
+                    try:
+                        await context.bot.send_message(
+                            user_id,
+                            "🎁 <b>+1 день</b> добавлен к твоему таймеру - ты подписался на канал!\n"
+                            "Когда достигнешь 🥉 Bronze - ещё <b>+2 дня</b> вам обоим 💪",
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not notify referred user {user_id}: {e}")
+                    try:
+                        await context.bot.send_message(
+                            referrer_id,
+                            "🎁 Твой реферал подписался на канал - вы оба получили <b>+1 день</b>!\n"
+                            "Когда он достигнет 🥉 Bronze - ещё <b>+2 дня</b> каждому 💪",
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not notify referrer {referrer_id}: {e}")
+
     elif new_status in ("left", "kicked", "banned"):
         set_subscribed(user_id, False)
         logger.info(f"User {user_id} unsubscribed — timer frozen.")
@@ -756,6 +806,7 @@ def main():
     app.add_handler(CommandHandler("partner",    cmd_partner))
     app.add_handler(CommandHandler("stats",      cmd_stats))
     app.add_handler(CommandHandler("addpartner", cmd_addpartner))
+    app.add_handler(CommandHandler("resetuser",  cmd_resetuser))
     app.add_handler(ChatMemberHandler(track_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(
         (filters.Document.ALL | filters.PHOTO | (filters.TEXT & ~filters.COMMAND)),
