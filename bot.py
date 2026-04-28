@@ -1,6 +1,7 @@
 import os
-import sqlite3
 import logging
+import psycopg2
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from telegram import Update
 from telegram.ext import (
@@ -20,9 +21,10 @@ def parse_iso(s: str) -> datetime:
     dt = datetime.fromisoformat(s)
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
+
 BOT_TOKEN    = os.environ["BOT_TOKEN"]
 CHANNEL_ID   = os.environ.get("CHANNEL_ID", "@vipcare_io")
-DB_PATH      = os.environ.get("DB_PATH", "users.db")
+DATABASE_URL = os.environ["DATABASE_URL"]
 ADMIN_ID     = int(os.environ.get("ADMIN_ID", "0"))
 PARTNER_CODE = os.environ.get("TIER_PARTNER", "VIPCARE-G4L8V")
 
@@ -125,81 +127,108 @@ def tier_index(name: str) -> int:
 
 # ── DB ──────────────────────────────────────────────────────────────────────
 
+@contextmanager
+def get_db():
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def init_db():
-    with sqlite3.connect(DB_PATH) as c:
-        cols = [r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()]
-        if cols and "active_seconds" not in cols:
-            c.execute("DROP TABLE users")
-            logger.info("Old DB schema dropped — migrating.")
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'users'
+            """)
+            cols = [row[0] for row in cur.fetchall()]
 
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id            INTEGER PRIMARY KEY,
-                active_seconds     INTEGER DEFAULT 0,
-                last_sub_start     TEXT,
-                is_subscribed      INTEGER DEFAULT 0,
-                partner            INTEGER DEFAULT 0,
-                highest_sent       TEXT DEFAULT '',
-                check_count        INTEGER DEFAULT 0,
-                check_window_start TEXT,
-                awaiting_article   INTEGER DEFAULT 0
-            )
-        """)
+            if cols and "active_seconds" not in cols:
+                cur.execute("DROP TABLE users")
+                logger.info("Old DB schema dropped — migrating.")
+                cols = []
 
-        # Live migration: add awaiting_article if DB already exists without it
-        if cols and "awaiting_article" not in cols:
-            try:
-                c.execute("ALTER TABLE users ADD COLUMN awaiting_article INTEGER DEFAULT 0")
-                logger.info("Migrated: added awaiting_article column.")
-            except Exception:
-                pass
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id            BIGINT PRIMARY KEY,
+                    active_seconds     INTEGER DEFAULT 0,
+                    last_sub_start     TEXT,
+                    is_subscribed      INTEGER DEFAULT 0,
+                    partner            INTEGER DEFAULT 0,
+                    highest_sent       TEXT DEFAULT '',
+                    check_count        INTEGER DEFAULT 0,
+                    check_window_start TEXT,
+                    awaiting_article   INTEGER DEFAULT 0
+                )
+            """)
+
+            if cols and "awaiting_article" not in cols:
+                try:
+                    cur.execute("ALTER TABLE users ADD COLUMN awaiting_article INTEGER DEFAULT 0")
+                    logger.info("Migrated: added awaiting_article column.")
+                except Exception:
+                    pass
 
 
 def get_user(user_id: int):
-    with sqlite3.connect(DB_PATH) as c:
-        return c.execute(
-            "SELECT active_seconds, last_sub_start, is_subscribed, partner, "
-            "highest_sent, check_count, check_window_start, awaiting_article "
-            "FROM users WHERE user_id = ?",
-            (user_id,)
-        ).fetchone()
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT active_seconds, last_sub_start, is_subscribed, partner, "
+                "highest_sent, check_count, check_window_start, awaiting_article "
+                "FROM users WHERE user_id = %s",
+                (user_id,)
+            )
+            return cur.fetchone()
 
 
 def upsert_user(user_id: int):
-    with sqlite3.connect(DB_PATH) as c:
-        c.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING",
+                (user_id,)
+            )
 
 
 def set_subscribed(user_id: int, subscribed: bool):
     now_iso = utcnow().isoformat()
-    with sqlite3.connect(DB_PATH) as c:
-        row = c.execute(
-            "SELECT active_seconds, last_sub_start, is_subscribed FROM users WHERE user_id = ?",
-            (user_id,)
-        ).fetchone()
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT active_seconds, last_sub_start, is_subscribed FROM users WHERE user_id = %s",
+                (user_id,)
+            )
+            row = cur.fetchone()
 
-        if not row:
-            if subscribed:
-                c.execute(
-                    "INSERT INTO users (user_id, last_sub_start, is_subscribed) VALUES (?, ?, 1)",
-                    (user_id, now_iso)
+            if not row:
+                if subscribed:
+                    cur.execute(
+                        "INSERT INTO users (user_id, last_sub_start, is_subscribed) VALUES (%s, %s, 1)",
+                        (user_id, now_iso)
+                    )
+                return
+
+            active_seconds, last_sub_start, is_sub = row
+
+            if subscribed and not is_sub:
+                cur.execute(
+                    "UPDATE users SET last_sub_start = %s, is_subscribed = 1 WHERE user_id = %s",
+                    (now_iso, user_id)
                 )
-            return
-
-        active_seconds, last_sub_start, is_sub = row
-
-        if subscribed and not is_sub:
-            c.execute(
-                "UPDATE users SET last_sub_start = ?, is_subscribed = 1 WHERE user_id = ?",
-                (now_iso, user_id)
-            )
-        elif not subscribed and is_sub and last_sub_start:
-            elapsed = int((utcnow() - parse_iso(last_sub_start)).total_seconds())
-            c.execute(
-                "UPDATE users SET active_seconds = ?, last_sub_start = NULL, is_subscribed = 0 "
-                "WHERE user_id = ?",
-                (active_seconds + elapsed, user_id)
-            )
+            elif not subscribed and is_sub and last_sub_start:
+                elapsed = int((utcnow() - parse_iso(last_sub_start)).total_seconds())
+                cur.execute(
+                    "UPDATE users SET active_seconds = %s, last_sub_start = NULL, is_subscribed = 0 "
+                    "WHERE user_id = %s",
+                    (active_seconds + elapsed, user_id)
+                )
 
 
 def get_effective_seconds(user_id: int) -> tuple[int, bool]:
@@ -214,19 +243,30 @@ def get_effective_seconds(user_id: int) -> tuple[int, bool]:
 
 
 def mark_highest_sent(user_id: int, tier_name: str):
-    with sqlite3.connect(DB_PATH) as c:
-        c.execute("UPDATE users SET highest_sent = ? WHERE user_id = ?", (tier_name, user_id))
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET highest_sent = %s WHERE user_id = %s",
+                (tier_name, user_id)
+            )
 
 
 def set_partner(user_id: int):
-    with sqlite3.connect(DB_PATH) as c:
-        c.execute("UPDATE users SET partner = 1 WHERE user_id = ?", (user_id,))
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET partner = 1 WHERE user_id = %s",
+                (user_id,)
+            )
 
 
 def set_partner_step(user_id: int, step: int):
-    """0 = idle, 1 = waiting for document, 2 = waiting for LinkedIn."""
-    with sqlite3.connect(DB_PATH) as c:
-        c.execute("UPDATE users SET awaiting_article = ? WHERE user_id = ?", (step, user_id))
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET awaiting_article = %s WHERE user_id = %s",
+                (step, user_id)
+            )
 
 
 # ── HELPERS ─────────────────────────────────────────────────────────────────
@@ -252,7 +292,6 @@ async def is_channel_member(bot, user_id: int) -> bool:
 
 async def maybe_notify_new_tier(context: ContextTypes.DEFAULT_TYPE, user_id: int,
                                  effective_seconds: int, highest_sent: str) -> bool:
-    """Send tier upgrade notification if user reached a new tier. Returns True if sent."""
     current = get_current_tier(effective_seconds)
     if not current:
         return False
@@ -344,12 +383,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = get_user(user.id)
     _, _, _, partner, highest_sent, _, _, _ = row
 
-    # Check for tier upgrade — if upgraded, the congrats message already has the code
     upgraded = False
     if member and not partner:
         upgraded = await maybe_notify_new_tier(context, user.id, effective_seconds, highest_sent or "")
 
-    # Show status block only if no upgrade notification was just sent
     if not upgraded:
         msg = build_status_block(effective_seconds, member, bool(partner))
         await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
@@ -368,13 +405,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not row:
         return
 
-    step = row[7]  # awaiting_article column reused as step counter
+    step = row[7]
     if step == 0:
         return
 
     username = f"@{user.username}" if user.username else f"(ID:{user.id})"
 
-    # ── Step 1: waiting for PDF/DOCX ────────────────────────────────────────
     if step == 1:
         if not update.message.document:
             await update.message.reply_text("📎 Пожалуйста, пришлите файл (PDF или DOCX).")
@@ -400,7 +436,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Спасибо! Теперь пришлите вашу ссылку на LinkedIn:")
         return
 
-    # ── Step 2: waiting for LinkedIn URL ────────────────────────────────────
     if step == 2:
         if not update.message.text:
             await update.message.reply_text("🔗 Пожалуйста, пришлите ссылку на LinkedIn текстом.")
@@ -425,10 +460,12 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
 
-    with sqlite3.connect(DB_PATH) as c:
-        rows = c.execute(
-            "SELECT user_id, active_seconds, last_sub_start, is_subscribed, partner FROM users"
-        ).fetchall()
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id, active_seconds, last_sub_start, is_subscribed, partner FROM users"
+            )
+            rows = cur.fetchall()
 
     total      = len(rows)
     subscribed = sum(1 for r in rows if r[3])
@@ -464,7 +501,6 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_addpartner(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Admin-only: /addpartner USER_ID — grants Partner status."""
     if update.effective_user.id != ADMIN_ID:
         return
     if not context.args:
@@ -499,12 +535,13 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def job_check_tier_upgrades(context: ContextTypes.DEFAULT_TYPE):
-    """Runs every 6 hours — proactively notifies subscribed users who levelled up."""
-    with sqlite3.connect(DB_PATH) as c:
-        rows = c.execute(
-            "SELECT user_id, active_seconds, last_sub_start, is_subscribed, highest_sent "
-            "FROM users WHERE is_subscribed = 1 AND partner = 0"
-        ).fetchall()
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id, active_seconds, last_sub_start, is_subscribed, highest_sent "
+                "FROM users WHERE is_subscribed = 1 AND partner = 0"
+            )
+            rows = cur.fetchall()
 
     for uid, active_sec, last_sub_start, is_sub, highest_sent in rows:
         eff = active_sec
@@ -529,7 +566,6 @@ def main():
         handle_message
     ))
 
-    # Check for tier upgrades every 6 hours, first run after 2 minutes
     app.job_queue.run_repeating(job_check_tier_upgrades, interval=21600, first=120)
 
     logger.info("VIPcare bot started.")
