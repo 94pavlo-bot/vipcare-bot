@@ -443,10 +443,21 @@ def build_status_block(effective_seconds: int, is_member: bool, partner: bool) -
         current = get_current_tier(effective_seconds)
         status_emoji = current[3] if current else "🆕"
         status_name  = current[0] if current else "Entry"
-        return (
-            f"⏸ Твой прогресс заморожен на {status_emoji} <b>{status_name}</b>.\n\n"
-            f"Подпишись на @vipcare_io чтобы продолжить — твои дни сохранены."
-        )
+        if effective_seconds > 0:
+            # Was subscribed before — timer is paused
+            return (
+                f"⏸ Твой прогресс сохранён на {status_emoji} <b>{status_name}</b>.\n\n"
+                f"Вступи обратно в @vipcare_io - твои дни сохранены и таймер продолжит считать 👇\n"
+                f"t.me/vipcare_io"
+            )
+        else:
+            # Never subscribed — fresh user
+            return (
+                f"Вижу, ты ещё не вступил в канал. Твой статус сейчас {status_emoji} <b>{status_name}</b>.\n\n"
+                f"Чтобы повышать его и открывать библиотеку - вступай в @vipcare_io, "
+                f"таймер запустится автоматически 🚀\n"
+                f"t.me/vipcare_io"
+            )
 
     current = get_current_tier(effective_seconds)
     nxt     = get_next_tier(effective_seconds)
@@ -473,6 +484,7 @@ def build_status_block(effective_seconds: int, is_member: bool, partner: bool) -
         msg += f"\nСледующий: {next_emoji} <b>{next_name}</b> через <b>{fmt(left)}</b>"
     else:
         msg += "\n👑 Максимальный статус достигнут. Уважение!"
+    msg += "\n\n👥 Пригласи коллегу и получите бонусные дни → /referral"
     return msg
 
 
@@ -496,61 +508,74 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 pass
 
-    await update.message.reply_text(WELCOME, parse_mode="HTML", disable_web_page_preview=True)
-
-    # Send referral welcome message to the new user
-    if referrer_id:
-        try:
-            referrer_chat = await context.bot.get_chat(referrer_id)
-            if referrer_chat.username:
-                referrer_mention = f"@{referrer_chat.username}"
-            else:
-                referrer_mention = f"<b>{referrer_chat.first_name}</b>"
-        except Exception:
-            referrer_mention = "твоим другом"
-
-        ref_welcome = (
-            f"👋 Вижу, ты пришёл от {referrer_mention} - это круто!\n\n"
-            f"Скажи ему спасибо за рекомендацию - ты попал в нужное место. "
-            f"Здесь собираются лидеры VIP-направления iGaming индустрии.\n\n"
-            f"Подпишись на @vipcare_io и твой таймер начнёт считать - "
-            f"через 3 дня откроется первый материал библиотеки 🔓"
-        )
-        await update.message.reply_text(ref_welcome, parse_mode="HTML", disable_web_page_preview=True)
-
-        # Notify referrer that their referral just joined
-        referrer_notify = (
-            f"❤️ Видим твоего реферала - спасибо, что улучшаешь наше комьюнити. "
-            f"Мы это ценим!"
-        )
-        try:
-            await context.bot.send_message(
-                referrer_id, referrer_notify,
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.warning(f"Could not notify referrer {referrer_id} about join: {e}")
-
     member = await is_channel_member(context.bot, user.id)
     set_subscribed(user.id, member)
 
-    # Give join bonus if referral link was used AND user is already in channel
-    if referrer_id and member:
-        given = give_ref_bonus_join(referrer_id, user.id)
-        if given:
-            bonus_msg = (
-                "🎁 <b>Реферальный бонус!</b>\n\n"
-                "Твой друг уже в канале — вы оба получили <b>+1 день</b> к таймеру.\n"
-                "Когда он достигнет Bronze — ещё <b>+2 дня</b> каждому 💪"
+    # Referred user — one personalized block instead of generic WELCOME
+    if referrer_id:
+        try:
+            referrer_chat = await context.bot.get_chat(referrer_id)
+            referrer_mention = f"@{referrer_chat.username}" if referrer_chat.username else f"<b>{referrer_chat.first_name}</b>"
+        except Exception:
+            referrer_mention = "твоим другом"
+
+        if member:
+            # Already in channel — give bonus and show timer
+            join_bonus_given = give_ref_bonus_join(referrer_id, user.id)
+            effective_seconds, _ = get_effective_seconds(user.id)
+            nxt = get_next_tier(effective_seconds)
+            next_line = f"До 🥉 <b>Bronze</b> - <b>{fmt(nxt[1] * 86400 - effective_seconds)}</b>." if nxt else ""
+            bonus_line = "\n\n🎁 <b>+1 день</b> зачислен вам обоим - ты уже в канале!" if join_bonus_given else ""
+
+            ref_block = (
+                f"👋 Вижу, ты пришёл от {referrer_mention} - это круто!\n\n"
+                f"Скажи ему спасибо - ты попал в нужное место. "
+                f"Здесь собираются лидеры VIP-направления iGaming индустрии.\n\n"
+                f"{next_line}"
+                f"{bonus_line}\n"
+                f"Когда достигнешь Bronze - ещё <b>+2 дня</b> вам обоим 💪\n\n"
+                f"<b>Команды:</b>\n"
+                f"/start - статус и код доступа\n"
+                f"/referral - пригласить коллегу (бонус обоим)\n"
+                f"/partner - стать автором библиотеки"
+            )
+            if join_bonus_given:
+                try:
+                    await context.bot.send_message(
+                        referrer_id,
+                        f"❤️ Видим твоего реферала - спасибо, что улучшаешь наше комьюнити. Мы это ценим!\n\n"
+                        f"🎁 <b>+1 день</b> зачислен вам обоим - он уже в канале!",
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not notify referrer {referrer_id}: {e}")
+        else:
+            # Not in channel yet — CTA to join
+            ref_block = (
+                f"👋 Вижу, ты пришёл от {referrer_mention} - это круто!\n\n"
+                f"Скажи ему спасибо - ты попал в нужное место. "
+                f"Здесь собираются лидеры VIP-направления iGaming индустрии.\n\n"
+                f"Вступай в @vipcare_io - таймер запустится автоматически. "
+                f"Через 3 дня откроется первый материал библиотеки 🔓\n\n"
+                f"<b>Команды:</b>\n"
+                f"/start - статус и код доступа\n"
+                f"/referral - пригласить коллегу (бонус обоим)\n"
+                f"/partner - стать автором библиотеки"
             )
             try:
                 await context.bot.send_message(
-                    referrer_id, bonus_msg,
+                    referrer_id,
+                    "❤️ Видим твоего реферала - спасибо, что улучшаешь наше комьюнити. Мы это ценим!",
                     parse_mode="HTML"
                 )
             except Exception as e:
-                logger.warning(f"Could not notify referrer {referrer_id}: {e}")
-            await update.message.reply_text(bonus_msg, parse_mode="HTML")
+                logger.warning(f"Could not notify referrer {referrer_id} about join: {e}")
+
+        await update.message.reply_text(ref_block, parse_mode="HTML", disable_web_page_preview=True)
+        return
+
+    # Regular (non-referred) user
+    await update.message.reply_text(WELCOME, parse_mode="HTML", disable_web_page_preview=True)
 
     effective_seconds, _ = get_effective_seconds(user.id)
     row = get_user(user.id)
@@ -717,6 +742,80 @@ async def cmd_resetuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ User {target_id} не найден в базе.")
 
 
+async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await update.message.reply_text(
+        "🛠 <b>Admin команды</b>\n\n"
+        "/stats — статистика по всем юзерам\n"
+        "/userinfo USER_ID — полная инфа по юзеру\n"
+        "/adddays USER_ID DAYS — добавить дни юзеру\n"
+        "/resetuser USER_ID — сбросить юзера полностью\n"
+        "/addpartner USER_ID — выдать Partner статус",
+        parse_mode="HTML"
+    )
+
+
+async def cmd_userinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /userinfo USER_ID")
+        return
+    try:
+        target_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID.")
+        return
+    row = get_user(target_id)
+    if not row:
+        await update.message.reply_text(f"❌ User {target_id} не найден в базе.")
+        return
+    active_sec, last_sub_start, is_sub, partner, highest_sent, _, _, _, referred_by, ref_join, ref_bronze = row
+    eff = active_sec
+    if is_sub and last_sub_start:
+        eff += int((utcnow() - parse_iso(last_sub_start)).total_seconds())
+    current = get_current_tier(eff)
+    tier_name = current[0] if current else "Entry"
+    await update.message.reply_text(
+        f"👤 <b>User {target_id}</b>\n\n"
+        f"Статус: <b>{tier_name}</b>\n"
+        f"Эффективных дней: <b>{eff // 86400}д {(eff % 86400) // 3600}ч</b>\n"
+        f"Подписан: <b>{'да' if is_sub else 'нет'}</b>\n"
+        f"Partner: <b>{'да' if partner else 'нет'}</b>\n"
+        f"Высший отправленный тир: <b>{highest_sent or '—'}</b>\n"
+        f"Реферер: <b>{referred_by or '—'}</b>\n"
+        f"Бонус join: <b>{'выдан' if ref_join else 'нет'}</b>\n"
+        f"Бонус bronze: <b>{'выдан' if ref_bronze else 'нет'}</b>",
+        parse_mode="HTML"
+    )
+
+
+async def cmd_adddays(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /adddays USER_ID DAYS")
+        return
+    try:
+        target_id = int(context.args[0])
+        days      = int(context.args[1])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid args.")
+        return
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET active_seconds = active_seconds + %s WHERE user_id = %s",
+                (days * 86400, target_id)
+            )
+            updated = cur.rowcount
+    if updated:
+        await update.message.reply_text(f"✅ User {target_id} +{days} дней добавлено.")
+    else:
+        await update.message.reply_text(f"❌ User {target_id} не найден в базе.")
+
+
 async def cmd_addpartner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
@@ -775,7 +874,29 @@ async def track_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif new_status in ("left", "kicked", "banned"):
         set_subscribed(user_id, False)
-        logger.info(f"User {user_id} unsubscribed — timer frozen.")
+        logger.info(f"User {user_id} unsubscribed — timer paused.")
+        row = get_user(user_id)
+        if row:
+            active_seconds = row[0]
+            last_sub_start = row[1]
+            eff = active_seconds
+            if last_sub_start:
+                eff += int((utcnow() - parse_iso(last_sub_start)).total_seconds())
+            current = get_current_tier(eff)
+            status_emoji = current[3] if current else "🆕"
+            status_name  = current[0] if current else "Entry"
+            try:
+                await context.bot.send_message(
+                    user_id,
+                    f"Видим, ты вышел из группы. Мы сохранили твой VIP статус "
+                    f"{status_emoji} <b>{status_name}</b>. "
+                    f"В любой момент возвращайся - и прогресс продолжится 👇\n"
+                    f"t.me/vipcare_io",
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+            except Exception as e:
+                logger.warning(f"Could not send leave DM to {user_id}: {e}")
 
 
 async def job_check_tier_upgrades(context: ContextTypes.DEFAULT_TYPE):
@@ -804,8 +925,11 @@ def main():
     app.add_handler(CommandHandler("referral",   cmd_referral))
     app.add_handler(CommandHandler("partner",    cmd_partner))
     app.add_handler(CommandHandler("stats",      cmd_stats))
+    app.add_handler(CommandHandler("admin",       cmd_admin))
     app.add_handler(CommandHandler("addpartner", cmd_addpartner))
     app.add_handler(CommandHandler("resetuser",  cmd_resetuser))
+    app.add_handler(CommandHandler("userinfo",   cmd_userinfo))
+    app.add_handler(CommandHandler("adddays",    cmd_adddays))
     app.add_handler(ChatMemberHandler(track_member, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(MessageHandler(
         (filters.Document.ALL | filters.PHOTO | (filters.TEXT & ~filters.COMMAND)),
