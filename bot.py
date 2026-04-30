@@ -32,12 +32,13 @@ BOT_USERNAME = os.environ.get("BOT_USERNAME", "vipcare_bot")
 
 # (name, days_required, env_var, emoji)
 TIERS = [
-    ("Bronze",   3,   "TIER_BRONZE",   "🥉"),
-    ("Silver",   14,  "TIER_SILVER",   "🥈"),
-    ("Gold",     30,  "TIER_GOLD",     "🥇"),
-    ("Platinum", 60,  "TIER_PLATINUM", "🪩"),
-    ("Diamond",  90,  "TIER_BLACK",    "💎"),
-    ("Supreme",  180, "TIER_SUPREME",  "👑"),
+    ("Bronze",    3,   "TIER_BRONZE",    "🥉"),
+    ("Silver",    14,  "TIER_SILVER",    "🥈"),
+    ("Gold",      30,  "TIER_GOLD",      "🥇"),
+    ("Platinum",  60,  "TIER_PLATINUM",  "🪩"),
+    ("Diamond",   90,  "TIER_BLACK",     "💎"),
+    ("Supreme",   180, "TIER_SUPREME",   "👑"),
+    ("Excelsior", 360, "TIER_EXCELSIOR", "🌟"),
 ]
 TIER_NAMES = [t[0] for t in TIERS]
 
@@ -71,6 +72,12 @@ TIER_UPGRADE_MESSAGES = {
         "Вся VIPCare Library открыта - каждый фреймворк, каждый плейбук, всё что мы создали.\n\n"
         "Добро пожаловать на вершину. Ты здесь на своём месте. 🏆"
     ),
+    "Excelsior": (
+        "🌟 <b>Excelsior</b>. Это не статус - это доказательство.\n\n"
+        "360 дней с нами. Ты видел как росло комьюнити, как появлялись новые материалы, "
+        "как менялся рынок - и ты был здесь всё это время.\n\n"
+        "Полный доступ ко всему. Навсегда. Ты это заслужил. 🏆"
+    ),
 }
 
 WELCOME = (
@@ -81,7 +88,7 @@ WELCOME = (
     "<b>Команды:</b>\n"
     "/start - проверить статус + получить код\n"
     "/referral - пригласить коллегу и получить бонус\n"
-    "/partner - стать автором библиотеки"
+    "/autor - стать автором библиотеки"
 )
 
 PARTNER_MSG = (
@@ -352,6 +359,24 @@ def to_cp(seconds: int) -> int:
     return max(0, seconds // 3600)
 
 
+def days_word(n: int) -> str:
+    if 11 <= n % 100 <= 19:
+        return "дней"
+    m = n % 10
+    if m == 1:
+        return "день"
+    if m in (2, 3, 4):
+        return "дня"
+    return "дней"
+
+
+def days_prefix(effective_seconds: int) -> str:
+    days = effective_seconds // 86400
+    if days == 0:
+        return ""
+    return f"Ты с нами уже <b>{days} {days_word(days)}</b>. "
+
+
 async def is_channel_member(bot, user_id: int) -> bool:
     try:
         m = await bot.get_chat_member(CHANNEL_ID, user_id)
@@ -460,11 +485,13 @@ def build_status_block(effective_seconds: int, is_member: bool, partner: bool) -
     current = get_current_tier(effective_seconds)
     nxt     = get_next_tier(effective_seconds)
 
+    prefix = days_prefix(effective_seconds)
+
     if not current:
         next_name, next_days, _, next_emoji = nxt
         left_cp = to_cp(next_days * 86400 - effective_seconds)
         return (
-            f"У тебя <b>{cp} CP</b> и статус 🆕 <b>Entry</b>\n"
+            f"{prefix}У тебя <b>{cp} CP</b> и статус 🆕 <b>Entry</b>\n"
             f"До статуса {next_emoji} <b>{next_name}</b> осталось <b>{left_cp} CP</b>\n\n"
             f"<i>1 час в @vipcare_io = 1 CP</i>\n"
             f"<i>1 день в @vipcare_io = 24 CP</i>\n\n"
@@ -474,7 +501,7 @@ def build_status_block(effective_seconds: int, is_member: bool, partner: bool) -
     name, _, env_var, emoji = current
     code = get_code(env_var)
     msg = (
-        f"У тебя <b>{cp} CP</b> и статус {emoji} <b>{name}</b>\n\n"
+        f"{prefix}У тебя <b>{cp} CP</b> и статус {emoji} <b>{name}</b>\n\n"
         f"Твой код: <code>{code}</code>\n"
         f"→ <a href=\"https://library.vipcare.io\">library.vipcare.io</a>\n"
     )
@@ -540,7 +567,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"<b>Команды:</b>\n"
                 f"/start - статус и код доступа\n"
                 f"/referral - пригласить коллегу (бонус обоим)\n"
-                f"/partner - стать автором библиотеки"
+                f"/autor - стать автором библиотеки"
             )
             if join_bonus_given:
                 try:
@@ -564,7 +591,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"<b>Команды:</b>\n"
                 f"/start - статус и код доступа\n"
                 f"/referral - пригласить коллегу (бонус обоим)\n"
-                f"/partner - стать автором библиотеки"
+                f"/autor - стать автором библиотеки"
             )
 
         await update.message.reply_text(ref_block, parse_mode="HTML", disable_web_page_preview=True)
@@ -614,7 +641,7 @@ async def cmd_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="HTML", disable_web_page_preview=True)
 
 
-async def cmd_partner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_autor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     upsert_user(user.id)
     set_partner_step(user.id, 1)
@@ -717,7 +744,47 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🪩 Platinum: {counts.get('Platinum', 0)}\n"
         f"💎 Diamond: {counts.get('Diamond', 0)}\n"
         f"👑 Supreme: {counts.get('Supreme', 0)}\n"
+        f"🌟 Excelsior: {counts.get('Excelsior', 0)}\n"
         f"🤝 Partner: {partners}",
+        parse_mode="HTML"
+    )
+
+
+async def cmd_topref(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users WHERE referred_by IS NOT NULL")
+            total_referred = cur.fetchone()[0]
+
+            cur.execute("""
+                SELECT referred_by, COUNT(*) as cnt
+                FROM users
+                WHERE referred_by IS NOT NULL
+                GROUP BY referred_by
+                ORDER BY cnt DESC
+                LIMIT 5
+            """)
+            top_rows = cur.fetchall()
+
+    lines = []
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
+    for i, (ref_id, cnt) in enumerate(top_rows):
+        try:
+            chat = await context.bot.get_chat(ref_id)
+            name = f"@{chat.username}" if chat.username else f"<b>{chat.first_name}</b>"
+        except Exception:
+            name = f"ID:{ref_id}"
+        lines.append(f"{medals[i]} {name} — <b>{cnt}</b> чел.")
+
+    top_text = "\n".join(lines) if lines else "Пока никто не привёл рефералов."
+
+    await update.message.reply_text(
+        f"👥 <b>Реферальная статистика</b>\n\n"
+        f"Всего пришло по рефералке: <b>{total_referred}</b> чел.\n\n"
+        f"<b>Топ 5 рефералов:</b>\n{top_text}",
         parse_mode="HTML"
     )
 
@@ -752,7 +819,8 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/userinfo USER_ID — полная инфа по юзеру\n"
         "/adddays USER_ID DAYS — добавить дни юзеру\n"
         "/resetuser USER_ID — сбросить юзера полностью\n"
-        "/addpartner USER_ID — выдать Partner статус",
+        "/addpartner USER_ID — выдать Partner статус\n"
+        "/topref — топ 5 рефераллов + общая статистика",
         parse_mode="HTML"
     )
 
@@ -931,10 +999,12 @@ def main():
 
     app.add_handler(CommandHandler("start",      cmd_start))
     app.add_handler(CommandHandler("referral",   cmd_referral))
-    app.add_handler(CommandHandler("partner",    cmd_partner))
+    app.add_handler(CommandHandler("autor",      cmd_autor))
+    app.add_handler(CommandHandler("partner",    cmd_autor))   # backward compat
     app.add_handler(CommandHandler("stats",      cmd_stats))
     app.add_handler(CommandHandler("admin",       cmd_admin))
     app.add_handler(CommandHandler("addpartner", cmd_addpartner))
+    app.add_handler(CommandHandler("topref",     cmd_topref))
     app.add_handler(CommandHandler("resetuser",  cmd_resetuser))
     app.add_handler(CommandHandler("userinfo",   cmd_userinfo))
     app.add_handler(CommandHandler("adddays",    cmd_adddays))
